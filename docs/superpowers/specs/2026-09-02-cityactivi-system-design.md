@@ -1,10 +1,19 @@
-# CityActivi System Design
+# CityActivi 系统详细设计
 
-## 1. Document Purpose
+## 1. 文档目标
 
-This document converts the approved CityActivi prototype into an implementation-ready design. The existing prototype is the product baseline. Its activity page, five configuration sections, copy, primary navigation, inline editing pattern, and core user flow remain unchanged.
+本文档用于把已经确认的 CityActivi 页面原型转换成可以直接指导开发的系统设计。
 
-The five prototype configuration sections are the product's **operations configuration**:
+当前原型是产品基线，以下内容保持不变：
+
+- 活动页仍然由“日历概览 + 下方活动详情”组成。
+- 配置页仍然保留现有五个栏目和主要操作位置。
+- 配置项仍然在当前卡片内部展开编辑，不改成右侧抽屉或居中弹窗。
+- 现有主要文案、信息结构和操作流程不删除。
+- 活动详情不依赖封面图，不突出报名人数。
+- 活动详情重点展示主办方、地点、活动价值、收获和提前准备。
+
+原型中的五个栏目本身就是本产品的**运营配置**：
 
 1. 搜寻范围
 2. 时间与地点
@@ -12,530 +21,680 @@ The five prototype configuration sections are the product's **operations configu
 4. 展示字段
 5. 推送与自动化
 
-There is no separate operations console in the first release. Model credentials, crawler concurrency, database connections, and infrastructure retry limits are technical deployment settings and do not appear in the prototype configuration page.
+第一版不再增加一套独立的“运营后台”。大模型密钥、数据库连接、抓取并发数等技术参数属于服务器部署配置，不放进原型的运营配置页面。
 
-## 2. Product Boundary
+## 2. 产品页面边界
 
-### 2.1 Activity Page
+### 2.1 活动页
 
-The activity page displays processed activity results only. It contains:
+活动页只展示已经完成抓取、合并、总结和核验的活动结果，包含：
 
-- A calendar overview starting on Monday.
-- A configured time-range switch such as 15, 30, or 60 days.
-- Dynamic filters derived from configured cities, topics, and activity types.
-- A detailed activity list below the calendar.
-- Direct links to the canonical activity or registration page.
+- 从周一开始排列的活动日历。
+- 根据配置动态生成的15天、30天或60天范围切换。
+- 根据已配置城市、主题和活动类型生成的筛选条件。
+- 日历下方的信息型活动详情列表。
+- 跳转到活动官方原文或正式报名入口的链接。
 
-It does not edit search rules, sources, prompts, or notification channels.
+活动页不负责修改抓取来源、主题规则、推送通道或运行计划。
 
-### 2.2 Configuration Page
+### 2.2 配置页
 
-The configuration page controls what the assistant searches, how it judges activities, what it displays, and where it sends results. Editing remains inline inside the current configuration card. It does not use a side drawer or a modal for routine editing.
+配置页用于决定：
 
-### 2.3 Fixed Product Rules
+- 系统去哪里找活动。
+- 哪些活动值得收录。
+- 搜索哪些城市和日期。
+- 活动页展示哪些内容。
+- 结果在什么时间推送到哪些通道。
 
-The following rules cannot be disabled by operations configuration:
+点击“编辑”后，只展开当前卡片。其他卡片不进入编辑状态，也不自动滚动页面。
 
-- An activity must have a verifiable title, start time, city, organizer, and technical description.
-- Expired activities are not newly published.
-- A generated summary cannot override factual source fields.
-- Secrets are never returned to the browser after saving.
-- Every published activity retains its source evidence.
+### 2.3 不允许关闭的固定规则
 
-## 3. Technical Architecture
+以下规则是系统质量底线，不允许通过运营配置关闭：
+
+- 活动必须具有可核验的标题、开始时间、城市、主办方和技术说明。
+- 已经开始或结束的活动不进入新的正式结果。
+- 大模型生成的文字不能覆盖原文中的事实字段。
+- 密钥保存后不能通过前端再次读取明文。
+- 每条正式活动必须保留其来源和证据。
+
+## 3. 总体技术结构
 
 ```text
-Vue 3 frontend
-  -> FastAPI HTTP API
-  -> PostgreSQL
-  -> Python scheduler and workers
-       -> configured source collectors
-       -> intelligent discovery Agent
-       -> extraction and normalization
-       -> duplicate detection and field merge
-       -> LLM structured summary
-       -> evidence validation and scoring
-       -> publication and notification
+Vue 3 前端
+  ├─ 活动页
+  └─ 运营配置页
+          ↓ 通过 HTTP API 访问
+FastAPI 后端
+  ├─ 配置版本管理
+  ├─ 活动查询接口
+  ├─ 推送通道管理
+  └─ 任务状态管理
+          ↓
+Python 后台任务执行器
+  ├─ 固定来源采集器
+  ├─ 智能探索 Agent
+  ├─ 网页正文提取
+  ├─ 活动去重与合并
+  ├─ 大模型结构化总结
+  ├─ 证据核验与含金量评分
+  └─ 页面发布与消息推送
+          ↓
+PostgreSQL 数据库
 ```
 
-### 3.1 Selected Stack
+### 3.1 技术栈及中文含义
 
-| Technology | Chinese meaning | Responsibility | Java analogy |
+| 技术名称 | 中文解释 | 在本项目中的作用 | Java 开发类比 |
 | --- | --- | --- | --- |
-| Vue 3 | 前端框架 | Activity and configuration pages | Similar role to a browser-side UI framework |
-| TypeScript | 带类型的 JavaScript | Frontend data contracts and safer refactoring | Java-like static type checking for frontend code |
-| Vite | 前端构建工具 | Local development and production bundle | Similar role to a fast frontend build runner |
-| Pinia | Vue 状态管理 | Draft configuration and shared page state | Similar to an application-scoped state service |
-| FastAPI | Python Web framework | HTTP API and request handling | Similar role to Spring Boot controllers |
-| Pydantic | 数据模型与校验 | Validate API and LLM structured output | Similar to DTO plus Bean Validation |
-| SQLAlchemy | Python database toolkit/ORM | Database queries and transactions | Closer to JPA/Hibernate than MyBatis |
-| Alembic | 数据库迁移工具 | Version database schema changes | Similar to Flyway or Liquibase |
-| PostgreSQL | 关系型数据库 | Configurations, activities, evidence, jobs | Similar usage to MySQL/PostgreSQL in Java systems |
-| Nginx | Web and reverse-proxy server | HTTPS entry, static files, API forwarding | Deployment gateway, not application code |
-| Docker Compose | Multi-container deployment description | Start frontend, API, worker, and database | Similar to an executable local deployment manifest |
+| Vue 3 | 前端页面框架 | 实现活动页和配置页 | 浏览器端界面框架 |
+| TypeScript | 带静态类型的 JavaScript | 定义前端数据类型并减少运行错误 | 类似 Java 的编译期类型检查 |
+| Vite | 前端构建工具 | 本地启动、热更新和生产打包 | 类似前端项目的构建运行器 |
+| Vue Router | Vue 路由工具 | 管理活动页和配置页地址 | 类似 Controller 路由表 |
+| Pinia | Vue 状态管理工具 | 管理配置草稿、筛选条件和页面共享状态 | 类似应用级状态服务 |
+| FastAPI | Python Web 开发框架 | 提供前后端接口 | 作用类似 Spring Boot 的 Web 层 |
+| Pydantic | Python 数据模型与校验工具 | 校验接口参数和大模型结构化输出 | 类似 DTO 加 Bean Validation |
+| SQLAlchemy | Python 数据库访问和对象映射工具 | 查询、写入数据库和管理事务 | 更接近 JPA/Hibernate，不完全等于 MyBatis |
+| Alembic | 数据库结构迁移工具 | 记录并执行数据库表结构升级 | 类似 Flyway 或 Liquibase |
+| PostgreSQL | 关系型数据库 | 保存配置、任务、活动和证据 | 使用方式与 Java 项目中的 MySQL/PostgreSQL 类似 |
+| Nginx | Web服务器和反向代理 | 提供 HTTPS、前端静态文件和接口转发 | 部署入口，不承担业务逻辑 |
+| Docker Compose | 多服务容器编排文件 | 一次启动前端、后端、任务进程和数据库 | 类似可执行的本地部署清单 |
 
-## 4. Configuration Lifecycle
+## 4. 配置的保存、发布和生效
 
-### 4.1 Three States
+### 4.1 三种配置状态
 
-| State | Meaning | Affects search jobs |
+| 状态 | 中文含义 | 是否影响正式任务 |
 | --- | --- | --- |
-| Published | 当前正式版本 | Yes |
-| Draft | 页面中尚未发布的修改 | No |
-| Job snapshot | 某次任务启动时复制的完整配置 | Only that job |
+| 草稿 | 在配置页保存、但尚未发布的修改 | 不影响 |
+| 已发布版本 | 当前正式生效的完整配置 | 影响下一次任务 |
+| 任务快照 | 某次任务启动时复制的配置副本 | 只影响该次任务 |
 
-Saving an inline card updates the draft. Clicking `发布更新` validates the complete draft and creates a new immutable published version. A running job continues using its original snapshot. A later job uses the newly published version.
+在卡片内点击“保存”，只更新草稿。点击页面顶部“发布更新”，后端才会校验整份配置并生成一个新的正式版本。
 
-### 4.2 Publish Actions
+### 4.2 为什么需要任务快照
 
-The existing top-right action keeps its position and gains real behavior:
+假设每天07:00的任务已经开始，07:05又修改并发布了城市配置：
 
-- `发布更新`: publish configuration; the next scheduled job uses it.
-- Secondary menu `发布并立即运行`: publish and create a new job immediately.
-- `预览页面`: render the activity page using current draft display settings without changing search results.
+- 07:00启动的任务继续使用启动时的旧配置。
+- 新发布的配置不会在任务中途插入。
+- 下一次任务使用07:05发布的新配置。
 
-If validation fails, the page stays on the current section and marks the exact card and field. Valid cards are not discarded.
+这样可以避免同一次任务前半段搜索深圳、后半段突然变成搜索上海。
 
-### 4.3 Concurrent Editing
+### 4.3 发布操作
 
-Each draft carries a `version_number`. Publishing checks whether the underlying published version has changed. If another session published first, the API returns a conflict and shows which configuration items changed. The system never silently overwrites a newer version.
+保留原型顶部现有操作位置：
 
-## 5. Operations Configuration: 搜寻范围
+- `预览页面`：使用当前草稿中的展示配置预览页面，不触发真实抓取。
+- `发布更新`：发布配置，下一次定时任务使用新版本。
+- `发布并立即运行`：作为“发布更新”的附加菜单，发布后立即创建一次任务。
 
-### 5.1 Basic Range
+如果校验失败，系统直接标出具体栏目、卡片和字段，不清空其他已经填写的内容。
 
-| Field | Type | Default | Execution effect |
+### 4.4 多窗口同时编辑
+
+每个草稿保存一个版本号。如果另一个浏览器窗口已经先发布，当前窗口不能静默覆盖，而是提示：
+
+- 当前正式版本已经更新。
+- 哪些配置项发生了变化。
+- 用户可以重新载入正式版本，再决定是否保留自己的草稿修改。
+
+## 5. 运营配置一：搜寻范围
+
+### 5.1 基本范围
+
+| 配置项 | 控件形式 | 默认值 | 实际作用 |
 | --- | --- | --- | --- |
-| 检索区域 | Preset selector | 大湾区 | Supplies a display name and suggested city list |
-| 目标数量 | Selector | 12 | Maximum published results after ranking |
+| 检索区域 | 下拉选择 | 大湾区 | 用于页面标题，并推荐一组城市 |
+| 目标数量 | 下拉选择 | 12场 | 排序后最多发布多少场活动 |
 
-A region is a preset, not a permanent city rule. Selecting 大湾区 suggests Shenzhen, Guangzhou, Hong Kong, Zhuhai, and Macau. Operations users may then remove, add, or reorder cities.
+“大湾区”只是一套城市预设，不是写死的搜索范围。选择后可以自动建议深圳、广州、香港、珠海和澳门，但运营人员可以删除、增加和重新排序城市。
 
-### 5.2 Target Audience Cards
+### 5.2 目标人群
 
-Each target audience card contains:
+每个目标人群都是一张可以新增、编辑、停用和删除的配置卡片。
 
-| Field | Required | Description |
+| 字段 | 是否必填 | 说明 |
 | --- | --- | --- |
-| Name | Yes | Human-readable audience, such as AI engineer |
-| Keywords | Yes | Terms used for relevance matching |
-| Priority | Yes | High, medium, or low contribution to scoring |
-| Enabled | Yes | Disabled cards remain stored but do not affect jobs |
+| 名称 | 是 | 例如“AI工程师”“研究生”“开源维护者” |
+| 匹配关键词 | 是 | 例如 Agent、LLM、论文、DevTools |
+| 优先级 | 是 | 高、中、低 |
+| 是否启用 | 是 | 停用后保留配置，但不参与新任务 |
 
-Audience keywords do not directly prove that an activity is relevant. They contribute to candidate scoring only after the activity has a verifiable agenda or technical description.
+目标人群关键词只参与相关度评分，不能单独证明活动值得收录。活动本身仍然必须有明确议程或技术说明。
 
-### 5.3 Public Source Cards
+### 5.3 公开来源
 
-Each source becomes a real editable collection item instead of a hardcoded row.
+公开来源不再写死成 Luma、Meetup 等固定数组，而是由运营人员维护的来源卡片。
 
-| Field | Required | Options or behavior |
+| 字段 | 是否必填 | 说明 |
 | --- | --- | --- |
-| Name | Yes | Luma, a university page, a community site, etc. |
-| Source type | Yes | Activity platform, community/project, academic, company, other |
-| Collection mode | Yes | Direct page, site search, discovery only |
-| Entry URL | Yes for direct/site search | Public source address |
-| Covered cities | Yes | Multi-select from configured cities |
-| Priority | Yes | Controls task order and search budget, not factual trust |
-| Enabled | Yes | Whether the source participates in new jobs |
+| 来源名称 | 是 | 例如 Luma、某高校活动页、某开源社区官网 |
+| 来源类型 | 是 | 活动平台、社区/项目、学术机构、公司活动、其他 |
+| 采集方式 | 是 | 直接页面、站内检索、仅用于发现 |
+| 公开入口 | 视采集方式而定 | 活动列表页、站点首页或搜索入口 |
+| 覆盖城市 | 是 | 从已经配置的城市中多选 |
+| 搜索优先级 | 是 | 高、中、低 |
+| 是否启用 | 是 | 是否参与下一次任务 |
 
-Collection modes:
+三种采集方式：
 
-- `direct_page`: fetch a known list or organizer page.
-- `site_search`: search within the configured domain using generated queries.
-- `discovery_only`: use the source as a clue; publishing still requires a canonical source page.
+- **直接页面**：抓取一个明确的活动列表页或主办方页面。
+- **站内检索**：在指定网站内，根据城市、主题和日期生成搜索条件。
+- **仅用于发现**：只把搜索结果当作线索，必须继续找到活动官方原文才能收录。
 
-### 5.4 Intelligent Discovery
+来源的“搜索优先级”只控制先搜索谁、分配多少搜索次数，不代表该来源的事实一定更可信。
 
-Intelligent discovery appears below public sources inside the same section. It is not a new navigation item.
+### 5.4 智能探索
 
-| Field | Default | Meaning |
+智能探索放在现有“公开来源”区域下面，不增加新的左侧导航栏目。
+
+| 配置项 | 默认值 | 说明 |
 | --- | --- | --- |
-| Enabled | On | Allow the Agent to find activities missed by fixed sources |
-| Maximum candidates | 30 | Maximum discovery clues per run |
-| Allowed domains | Empty | Optional domains the Agent may prioritize |
-| Blocked domains | Empty | Domains that cannot become evidence |
-| Official-source required | On, fixed | Candidate cannot publish without a canonical page |
+| 是否启用 | 启用 | 固定来源之外，是否允许 Agent 补充搜索 |
+| 每次最多发现线索 | 30条 | 控制搜索范围和大模型费用 |
+| 优先网站 | 空 | 运营人员希望优先查找的网站 |
+| 禁止网站 | 空 | 不允许作为证据的网站 |
+| 必须找到官方原文 | 固定启用 | 没有官方或可信原文的线索不能发布 |
 
-The Agent may generate search queries, search, open pages, and identify canonical pages. It cannot directly create a published activity or write final factual values.
+智能探索 Agent 可以：
 
-## 6. Operations Configuration: 时间与地点
+- 根据配置生成新的搜索组合。
+- 搜索网页。
+- 打开候选页面。
+- 寻找活动官方页面和报名入口。
+- 判断多个页面是否可能描述同一场活动。
 
-### 6.1 Automation Schedule
+智能探索 Agent 不可以：
 
-| Field | Options | Behavior |
+- 直接把搜索摘要发布成活动。
+- 自己编写标题、时间、地点和主办方。
+- 绕过固定核验规则。
+- 直接修改运营配置。
+
+## 6. 运营配置二：时间与地点
+
+### 6.1 自动运行时间
+
+| 配置项 | 可选值 | 实际作用 |
 | --- | --- | --- |
-| Frequency | Daily, weekdays, weekly Monday | Creates jobs according to local timezone |
-| Run time | Configured time options | Stored as local wall-clock time |
-| Timezone | Asia/Shanghai by default | Used for scheduling and display |
-| Coverage days | 7, 15, 30, 60 | Search window beginning at run-day 00:00 |
+| 运行频率 | 每天、工作日、每周一 | 决定什么时候创建抓取任务 |
+| 运行时间 | 例如07:00、08:00、18:30 | 使用配置时区解释 |
+| 时区 | 默认 Asia/Shanghai | 决定任务触发和页面时间显示 |
+| 覆盖天数 | 7、15、30、60天 | 从运行当天00:00开始搜索未来活动 |
 
-The implementation must remove the prototype's hardcoded reference date. Every job calculates its window from the actual execution time and stored timezone.
+生产代码必须删除原型中写死的 `2026-08-20` 日期。每次任务都根据真实运行时间和配置时区计算日期范围。
 
-### 6.2 Commute Origin
+### 6.2 交通出发点
 
-| Field | Required | Description |
+| 字段 | 是否必填 | 说明 |
 | --- | --- | --- |
-| Origin name | Yes | Display name such as 深大地铁站 |
-| Address | Yes | Searchable address |
-| Coordinates | Generated | Latitude and longitude returned by map provider |
-| Travel mode | Yes | Transit, driving, walking, cycling |
-| Map provider | Yes | Amap for mainland China; Google may be selected for supported regions |
+| 起点名称 | 是 | 例如“深大地铁站” |
+| 具体地址 | 是 | 用于地图检索和人工确认 |
+| 经纬度 | 系统生成 | 用户选中地图地点后保存 |
+| 常用出行方式 | 是 | 公共交通、驾车、步行或骑行 |
+| 地图服务 | 是 | 中国大陆优先高德地图，其他区域可以配置 Google Maps |
 
-The system stores coordinates after address selection. Commute time comes from a map-routing API and includes provider, calculation time, duration, distance, and travel mode. It must not use simulated fixed offsets.
+通勤信息必须来自地图路线接口，保存以下结果：
 
-### 6.3 City Rule Cards
+- 预计通勤时长。
+- 路线距离。
+- 出行方式。
+- 使用的地图服务。
+- 计算时间。
 
-Cities are editable collection items, not fixed Shenzhen/Guangzhou rows.
+不再使用原型中的固定偏移量模拟通勤时长。
 
-| Field | Description |
+### 6.3 城市与收录门槛
+
+城市改成真正可以新增、编辑、停用和删除的配置卡片，不再固定只有深圳、广州、珠海、香港和澳门。
+
+| 字段 | 说明 |
 | --- | --- |
-| City | Standard city identifier and display name |
-| Inclusion threshold | High only, high and medium, or excluded |
-| Maximum commute | Optional duration limit |
-| Priority | Search allocation priority |
-| Enabled | Participate in future jobs |
+| 城市 | 使用标准城市名称和内部唯一编号 |
+| 收录门槛 | 仅高含金量、高和中含金量、不收录 |
+| 最大通勤时长 | 可选，例如90分钟 |
+| 搜索优先级 | 决定该城市获得多少搜索资源 |
+| 是否启用 | 是否参与下一次任务 |
 
-A commute limit is applied after venue coordinates are available. Missing coordinates do not automatically reject an otherwise high-confidence activity; the activity is marked `commute unavailable` and evaluated by its city threshold.
+如果活动地点无法解析经纬度，系统不会因为缺少通勤数据直接删除高质量活动，而是显示“暂未计算通勤”，再按城市收录门槛判断。
 
-## 7. Operations Configuration: 主题偏好
+## 7. 运营配置三：主题偏好
 
-### 7.1 Priority Topics
+### 7.1 优先主题
 
-Each topic includes name, keywords, priority, and enabled state. Topics drive query planning, relevance scoring, page filters, and labels. They do not replace evidence extraction.
+每个主题包含：
 
-### 7.2 Weak-Content Rules
+- 主题名称。
+- 匹配关键词。
+- 高、中、低优先级。
+- 是否启用。
 
-Each rule includes name, matching terms, penalty level, and enabled state. A match lowers the score but does not automatically delete an activity when strong technical agenda evidence exists.
+主题配置同时影响搜索计划、活动相关度评分、活动页筛选项和活动标签，但最终标签必须有活动原文支持。
 
-### 7.3 Activity Types
+### 7.2 降权规则
 
-Activity type cards define the filter vocabulary shown on the activity page, such as industry, academic, and open source. A type may include a description and matching hints. The backend classifies an event only when evidence supports the classification.
+每条降权规则包含名称、匹配关键词、扣分程度和启用状态。
 
-### 7.4 Sorting
+降权不是直接删除。例如一场活动标题包含“行业趋势”，但议程中有完整的模型部署和性能优化实践，它仍然可以通过技术深度获得较高分数。
 
-Supported sort dimensions are date/start time, technical relevance, and commute distance. The primary and secondary dimensions cannot be identical. Final deterministic tie-breakers are start time and event ID.
+### 7.3 活动类型
 
-### 7.5 Fixed Technical Rule
+活动类型用于定义活动页右侧标签和筛选项，例如：
 
-The existing fixed rule remains: a candidate must include a verifiable technical topic or agenda. Generic business, recruitment, or trend content cannot pass only because it matches a configured keyword.
+- 业界：公司、工程团队和产业实践。
+- 学术：论文、实验室和研究分享。
+- 开源：开源项目、社区和维护者活动。
 
-## 8. Operations Configuration: 展示字段
+运营人员可以新增类型，但系统只有在原文证据支持时才给活动添加该类型。
 
-### 8.1 Fixed Fields
+### 7.4 排序规则
 
-Date/time, title, location, and organizer remain mandatory. If any cannot be verified, the candidate is not published.
+第一排序和第二排序支持：
 
-### 8.2 Optional Fields
+- 日期与开始时间。
+- 技术相关度。
+- 通勤距离。
 
-Community, technical direction, source, why it is worth attending, commute, registration count, cost, source link, cover, takeaways, and prerequisites remain individually configurable.
+两个排序字段不能相同。分数完全相同时，使用开始时间和活动唯一编号保证结果稳定。
 
-Configuration changes presentation only. Turning off `commute` does not stop route calculation if commute is used for filtering. Turning off `source` does not remove evidence records.
+### 7.5 固定技术要求
 
-### 8.3 Summary Detail
+活动必须包含可核验的技术主题、议程或工程内容。纯招聘、纯商业宣传和没有技术内容的趋势活动，不能只因为命中关键词而进入正式列表。
 
-| Option | Activity page output |
+## 8. 运营配置四：展示字段
+
+### 8.1 固定字段
+
+以下四项不能关闭：
+
+- 日期与时间。
+- 活动标题。
+- 地点。
+- 主办方。
+
+任何固定字段无法核验时，该候选活动不能正式发布。
+
+### 8.2 可选字段
+
+现有可选字段全部保留：
+
+- 社区。
+- 技术方向。
+- 来源。
+- 为什么值得去。
+- 通勤估算。
+- 报名人数。
+- 费用。
+- 原文链接。
+- 活动封面。
+- 你会收获什么。
+- 提前准备。
+
+展示配置只影响页面输出，不应反向破坏搜索和评分。例如关闭“通勤估算”的页面展示，不代表城市规则不能继续使用通勤时长进行筛选。
+
+### 8.3 活动摘要详细度
+
+| 选项 | 页面效果 |
 | --- | --- |
-| Full excerpt | At least three meaningful lines when source material is sufficient |
-| Standard summary | One to two sentences |
-| One line | A compact factual sentence |
+| 完整摘录 | 原文内容足够时至少展示三行有效信息 |
+| 标准摘要 | 展示一至两句话 |
+| 只显示一句 | 只保留最关键的一句事实摘要 |
 
-`Why worth attending` is the primary analysis block. It should identify organizer credibility, agenda depth, practical outcome, and audience fit. `Takeaways` and `Prerequisites` must be concrete lists, not generic model language.
+“为什么值得去”是详情页最重要的分析区，应尽量回答：
 
-### 8.4 Missing Values
+- 主办方为什么可信或具有代表性。
+- 活动议程是否有真正的技术深度。
+- 参加者能够获得什么实际结果。
+- 最适合哪类人参加。
 
-When automatic hiding is enabled, absent optional fields do not render placeholders or empty layout regions. The page does not reserve image space when no valid cover exists.
+“你会收获什么”和“提前准备”必须根据议程生成具体条目，不能使用“拓展视野”“了解前沿”等空泛表达。
 
-## 9. Operations Configuration: 推送与自动化
+### 8.4 缺失字段处理
 
-### 9.1 Channel Cards
+启用“自动隐藏未知值”后：
 
-| Field | Description |
+- 没有封面就不渲染图片区域。
+- 没有费用就不显示费用行。
+- 没有报名人数就不显示报名信息。
+- 不使用“暂无”“待补充”等占位内容撑开页面。
+
+## 9. 运营配置五：推送与自动化
+
+### 9.1 推送通道
+
+每个推送通道是一张可独立编辑的配置卡片。
+
+| 字段 | 说明 |
 | --- | --- |
-| Channel name | User-defined recognizable name |
-| Channel type | Feishu, ServerChan, generic Webhook |
-| Endpoint | Webhook URL or service endpoint |
-| Secret | Feishu signature secret or ServerChan SendKey |
-| Enabled | Whether future jobs send to this channel |
-| Delivery scope | All selected results or high-value results only |
+| 通道名称 | 例如“技术活动群”“个人微信” |
+| 通道类型 | 飞书、Server酱、通用 Webhook |
+| 推送地址 | 飞书 Webhook 或服务地址 |
+| 密钥 | 飞书签名密钥或 Server酱 SendKey |
+| 是否启用 | 是否参与下一次推送 |
+| 推送范围 | 全部入选活动或只推送高含金量活动 |
 
-One profile may have multiple channels of the same type. Every channel supports `test connection`, `disable`, `clear secret`, and `delete`. Clearing a secret requires explicit confirmation; disabling a channel retains its settings.
+同一种通道可以配置多个，例如两个不同的飞书群。
 
-After saving, the API returns only `secret_configured: true/false`. It never returns the saved secret text.
+每个通道都必须提供：
 
-### 9.2 Automation Status
+- 测试连接。
+- 启用或停用。
+- 清除密钥。
+- 删除通道。
+- 查看最近一次测试或推送结果。
 
-The current summary shows automation name, schedule, active configuration version, last run, next run, and last result. `本地预检` becomes `运行预检` in production and checks configuration validity, source reachability, map provider, model access, and enabled notification channels without publishing activities.
+停用只停止推送，不删除地址和密钥。清除密钥需要二次确认。保存后，前端只能看到“已配置密钥”，不能重新获取密钥明文。
 
-## 10. Activity Page Behavior Derived from Configuration
+### 9.2 自动化状态
 
-| Activity-page element | Configuration source |
+原型现有状态摘要改成真实数据，显示：
+
+- 自动化名称。
+- 当前运行计划。
+- 当前生效的配置版本。
+- 最近一次运行时间和结果。
+- 下一次计划运行时间。
+- 最近一次发布配置的时间。
+
+“本地预检”在生产环境中改为“运行预检”，但保持原有按钮位置。预检检查：
+
+- 配置字段是否完整。
+- 已启用来源是否可以访问。
+- 地图服务是否可用。
+- 大模型是否可以调用。
+- 已启用推送通道是否可以发送测试消息。
+
+预检不抓取正式活动，也不向活动页发布结果。
+
+## 10. 配置如何影响活动首页
+
+| 首页内容 | 来自哪个配置 |
 | --- | --- |
-| Date range selector | Published coverage days |
-| Calendar city labels | Enabled city rules |
-| Topic filter | Enabled priority topics discovered in published events |
-| Type filter | Enabled activity types |
-| Result limit | Target count |
-| Detail fields | Display fields |
-| Summary length | Summary detail option |
-| High-value marker | Scoring threshold and confidence |
-| Commute display | Origin, route result, and display toggle |
+| 日期范围切换 | 覆盖天数 |
+| 日历中的城市文字 | 已启用城市 |
+| 主题筛选 | 已启用主题和已发布活动中的实际主题 |
+| 活动类型筛选 | 已启用活动类型 |
+| 活动数量上限 | 目标数量 |
+| 详情展示字段 | 展示字段开关 |
+| 为什么值得去的长度 | 摘要详细度 |
+| 高含金量标记 | 含金量分数和可信度 |
+| 通勤时间 | 出发点、地图计算结果和展示开关 |
 
-If coverage is 60 days, the page offers 15, 30, and 60-day views. It cannot show a range longer than the published search coverage. The calendar initially displays a compact range and provides smooth expand/collapse without rerunning the search.
+如果配置覆盖60天，首页提供15天、30天和60天三个范围。首页不能选择超过后台实际抓取范围的日期。
 
-## 11. Job Workflow
+日历默认紧凑展示，展开和收起只改变页面显示，不重新抓取数据。
+
+## 11. 一次活动任务的完整流程
 
 ```text
-PENDING
-  -> DISCOVERING
-  -> FETCHING
-  -> EXTRACTING
-  -> MERGING
-  -> SUMMARIZING
-  -> VERIFYING
-  -> RANKING
-  -> PUBLISHING
-  -> NOTIFYING
-  -> COMPLETED
+等待执行
+  → 发现活动线索
+  → 抓取网页
+  → 提取事实字段
+  → 去重和合并
+  → 大模型总结
+  → 证据核验
+  → 含金量评分与排序
+  → 发布活动页
+  → 推送通知
+  → 完成
 ```
 
-| State | Responsibility | Recoverable failure behavior |
+| 阶段 | 具体工作 | 失败处理 |
 | --- | --- | --- |
-| PENDING | Job waits for worker | Another worker may claim it after lease expiry |
-| DISCOVERING | Build queries and candidate URLs | Failed source does not stop other sources |
-| FETCHING | Download public pages | Retry transient network errors |
-| EXTRACTING | Parse factual fields | Store failure reason and raw document |
-| MERGING | Detect duplicates and combine evidence | Conflicts go to verification |
-| SUMMARIZING | Generate structured analysis | Retry once; never fabricate missing facts |
-| VERIFYING | Check claims against evidence | Reject or mark candidate for review |
-| RANKING | Apply published scoring rules | Deterministic calculation |
-| PUBLISHING | Create event versions | Database transaction prevents partial publication |
-| NOTIFYING | Send configured messages | Failure does not roll back published activities |
+| 等待执行 | 等待后台任务进程领取 | 执行进程异常后可以重新领取 |
+| 发现线索 | 根据配置生成查询并发现候选网址 | 单个来源失败不影响其他来源 |
+| 抓取网页 | 下载活动页面正文 | 临时网络错误自动重试 |
+| 提取字段 | 提取标题、时间、地点、主办方和议程 | 保留原网页和失败原因 |
+| 去重合并 | 判断不同页面是否是同一活动 | 字段冲突进入核验 |
+| 大模型总结 | 生成价值、收获和准备内容 | 输出格式错误时重试一次 |
+| 证据核验 | 检查总结是否有原文支持 | 不合格内容拒绝发布 |
+| 评分排序 | 根据正式配置计算分数 | 使用确定性计算，不让模型随意给分 |
+| 发布活动 | 写入正式活动版本 | 使用数据库事务避免发布一半 |
+| 推送通知 | 向各个启用通道发送 | 推送失败不撤销已发布活动 |
 
-## 12. Search Planning
+## 12. 搜索计划如何生成
 
-The planner reads the immutable job snapshot and produces bounded tasks. It does not create the full Cartesian product of every city, topic, audience, and source.
+系统根据本次任务的配置快照生成有限数量的搜索任务，不会把所有城市、主题、人群和来源直接全部相乘，否则查询数量会失控。
 
-Planning order:
+生成顺序：
 
-1. Allocate a search budget by enabled source and priority.
-2. Group similar topic keywords into one query group.
-3. Generate queries per city and source capability.
-4. Apply the configured date window.
-5. Stop discovery when the source budget or candidate limit is reached.
-6. Record every generated query for later diagnosis.
+1. 根据来源优先级分配搜索次数。
+2. 把相近主题关键词合成主题组。
+3. 根据城市和来源能力生成搜索任务。
+4. 加入本次任务的日期范围。
+5. 达到来源搜索预算或候选数量上限后停止扩展。
+6. 保存实际使用过的搜索条件，方便后续排查。
 
-Example logical query:
-
-```text
-city=深圳
-topics=[Agent, RAG, MCP]
-activity_types=[业界, 开源]
-date_window=2026-09-02..2026-09-16
-source=Luma
-```
-
-The displayed query text may vary by source, but the logical parameters remain stored and auditable.
-
-## 13. Configuration Merge
-
-Configuration merge means producing a complete validated published version. It is separate from event deduplication.
-
-Precedence:
+一条内部搜索任务示例：
 
 ```text
-schema defaults
-  < existing published configuration
-  < current draft changes
+城市：深圳
+主题：Agent、RAG、MCP
+活动类型：业界、开源
+日期：2026-09-02 至 2026-09-16
+来源：Luma
 ```
 
-Rules:
+修改并发布城市、主题、来源或覆盖天数后，下一次任务会自动重新生成搜索计划，不需要修改 Python 代码。
 
-- Nested objects use field-level deep merge.
-- Collection items use stable UUIDs, never array positions.
-- Creating, updating, disabling, and deleting are explicit operations.
-- A deleted user item is not silently restored from a later default catalog.
-- Secrets are referenced by channel ID and are not embedded in configuration snapshots.
-- Publishing writes a complete normalized document, not a patch.
-- Jobs copy the published document into `job_runs.config_snapshot`.
+## 13. 配置合并
 
-## 14. Event Duplicate Detection and Field Merge
+“配置合并”指把系统默认值、当前正式配置和本次草稿修改整理成一份完整的新版本，它与活动去重不是一回事。
 
-### 14.1 Identity Checks
-
-Duplicate checks run in this order:
-
-1. Same source and external event ID.
-2. Same normalized canonical URL.
-3. Same organizer, city, and start time with highly similar normalized title.
-4. Similar title with start time within 90 minutes and geographically close venue.
-
-The third and fourth checks create a duplicate score. A high score merges automatically; a middle score requires verification; a low score keeps separate events.
-
-### 14.2 Source Trust
-
-Default factual trust order:
+优先顺序：
 
 ```text
-organizer official page
-  > official registration page
-  > recognized activity platform
-  > community repost
-  > search result snippet
+系统字段默认值
+  < 当前已经发布的完整配置
+  < 本次草稿修改
 ```
 
-Source priority configured by operations controls search effort. It does not override factual trust. A high-priority repost cannot replace a conflicting organizer-official start time.
+具体规则：
 
-### 14.3 Field Merge Rules
+- 普通对象按字段进行深层合并。
+- 目标人群、来源、城市、主题和通道等列表项按唯一编号合并。
+- 不使用数组位置判断同一项。
+- 新增、修改、停用和删除都是明确操作。
+- 用户已经删除的默认来源，系统升级后不能悄悄重新添加。
+- 发布时保存一份完整配置，不只保存本次修改的几个字段。
+- 推送密钥只通过通道编号引用，不写进任务配置快照。
+- 任务启动时复制已发布配置，运行中不再动态合并新配置。
 
-| Field | Merge behavior |
+## 14. 活动去重与多来源合并
+
+### 14.1 判断是不是同一场活动
+
+按以下顺序判断：
+
+1. 来源相同，并且来源内部活动编号相同。
+2. 标准原文地址相同。
+3. 主办方、城市、开始时间相同，标题高度相似。
+4. 标题高度相似，开始时间相差不超过90分钟，地点距离较近。
+
+前两种可以直接认定。后两种计算重复可信度：高可信度自动合并，中等可信度进入核验，低可信度保留为不同活动。
+
+### 14.2 事实来源可信顺序
+
+默认顺序：
+
+```text
+主办方官方网站
+  > 官方报名页面
+  > 可信活动平台
+  > 社区转发页面
+  > 搜索结果摘要
+```
+
+运营配置中的“来源优先级”控制搜索资源，不改变事实可信顺序。即使某个转载来源设置为高优先级，也不能覆盖主办方官网公布的活动时间。
+
+### 14.3 不同字段怎么合并
+
+| 字段 | 合并规则 |
 | --- | --- |
-| Title | Prefer official complete title; retain aliases for search |
-| Start/end time | Prefer official timestamp; store timezone and conflict evidence |
-| Venue | Prefer precise official address; geocode after merge |
-| Organizer | Normalize names but retain original display value |
-| Registration URL | Prefer canonical official registration destination |
-| Agenda | Combine non-duplicate agenda items with evidence links |
-| Topics/types | Union supported classifications; remove unsupported guesses |
-| Description | Preserve source text separately; generate a new summary from evidence |
+| 标题 | 优先使用官方完整标题，其他标题作为别名保留 |
+| 开始和结束时间 | 优先官方时间，保存时区和冲突证据 |
+| 地点 | 优先官方精确地址，合并后再进行地图解析 |
+| 主办方 | 统一名称用于去重，同时保留原始显示名称 |
+| 报名链接 | 优先真正的官方报名入口 |
+| 议程 | 合并不重复的议程项目，并保留各自证据 |
+| 主题和活动类型 | 合并有证据支持的分类，删除没有证据的猜测 |
+| 活动描述 | 原文分别保存，页面摘要根据全部有效证据重新生成 |
 
-Conflicting mandatory fields are never silently chosen by the LLM. They enter verification or remain unpublished.
+标题、时间、地点和主办方发生冲突时，不能交给大模型随意选择。系统必须进入核验流程，或者暂不发布。
 
-## 15. Evidence and LLM Output
+## 15. 原文证据和大模型生成内容
 
-Each displayed statement is classified as:
+系统把页面内容分为三类：
 
-- `EXTRACTED`: directly present in source material.
-- `DERIVED`: calculated from extracted facts, such as commute time.
-- `GENERATED`: model analysis, such as audience fit or prerequisites.
+| 类型 | 中文含义 | 示例 |
+| --- | --- | --- |
+| 原文提取 | 网页中直接出现 | “9月18日19:00开始” |
+| 计算得出 | 根据事实计算 | “从深大地铁站预计42分钟” |
+| 大模型分析 | 模型根据议程进行判断 | “适合了解基本 RAG 流程的工程师” |
 
-The LLM receives normalized source evidence and returns a Pydantic-validated object:
+大模型接收清洗后的网页证据，并按照固定结构返回：
 
-```text
-summary
-why_worth_attending[]
-takeaways[]
-prerequisites[]
-topic_labels[]
-activity_type
-evidence_references[]
-```
+- 活动摘要。
+- 为什么值得参加。
+- 可以获得什么。
+- 需要提前准备什么。
+- 技术主题标签。
+- 活动类型判断。
+- 每一项判断引用了哪些证据。
 
-Mandatory facts are not accepted from generated output. At least 80% of factual claims displayed in the detail page must resolve to stored evidence. Generated judgment is allowed only in clearly analytical fields.
+标题、时间、地点和主办方不能从大模型生成结果中取值。
 
-## 16. Scoring
+活动详情中的事实性陈述，至少80%必须能够关联到保存的网页证据。大模型可以在“为什么值得去”等分析区域进行归纳，但不能把推测写成原文事实。
 
-Default score out of 100:
+## 16. 含金量评分
 
-| Dimension | Weight |
+默认满分100分：
+
+| 评分项 | 默认分值 |
 | --- | ---: |
-| Topic relevance | 30 |
-| Agenda technical depth | 20 |
-| Organizer credibility | 15 |
-| Audience fit | 15 |
-| Concrete takeaways | 10 |
-| Evidence completeness | 10 |
+| 主题相关度 | 30分 |
+| 议程技术深度 | 20分 |
+| 主办方可信度 | 15分 |
+| 目标人群匹配 | 15分 |
+| 是否有具体收获 | 10分 |
+| 证据完整度 | 10分 |
 
-Weak-content rules apply penalties from 10 to 30 points. `High value` requires score at least 80 and confidence at least 0.8. `Medium value` defaults to 65-79. City inclusion rules then decide whether the event may publish.
+降权规则根据严重程度扣10至30分。
 
-## 17. Core Data Model
+默认判断：
 
-| Table | Purpose |
+- 高含金量：总分不低于80，并且事实可信度不低于0.8。
+- 中含金量：总分65至79。
+- 低于65：默认不进入正式活动页。
+
+活动最终是否收录，还要继续应用对应城市的收录门槛和通勤规则。
+
+## 17. 核心数据库表
+
+| 表名 | 中文用途 |
 | --- | --- |
-| assistant_profiles | One activity assistant and its identity |
-| config_versions | Draft and immutable published configurations |
-| job_runs | Job state, timing, statistics, and configuration snapshot |
-| raw_documents | Downloaded page content and metadata |
-| event_candidates | Unpublished normalized candidates |
-| events | Stable logical event identity |
-| event_versions | Published event content versions |
-| event_evidence | Field/claim-to-source evidence links |
-| llm_runs | Model input hash, output, token usage, cost, and status |
-| notification_channels | Channel metadata and encrypted secret reference |
-| notification_deliveries | Per-channel delivery status and retry history |
+| `assistant_profiles` | 保存一个活动助手的基本信息 |
+| `config_versions` | 保存草稿和不可修改的正式配置版本 |
+| `job_runs` | 保存任务状态、时间、统计和配置快照 |
+| `raw_documents` | 保存抓取到的网页内容和来源信息 |
+| `event_candidates` | 保存尚未正式发布的候选活动 |
+| `events` | 保存同一场活动的稳定身份 |
+| `event_versions` | 保存活动每次正式发布的内容版本 |
+| `event_evidence` | 保存字段或结论对应的原文证据 |
+| `llm_runs` | 保存大模型调用状态、输出、消耗和版本 |
+| `notification_channels` | 保存推送通道和加密密钥引用 |
+| `notification_deliveries` | 保存每次推送的成功、失败和重试记录 |
 
-## 18. Main API
+## 18. 主要后端接口
 
-| Method and path | Purpose |
+| 请求方式和地址 | 中文用途 |
 | --- | --- |
-| `GET /api/profiles/{id}/config` | Load published configuration and current draft |
-| `PATCH /api/profiles/{id}/config` | Save draft field or collection-item changes |
-| `POST /api/profiles/{id}/publish` | Validate and publish a new version |
-| `POST /api/profiles/{id}/run` | Create an immediate job using published config |
-| `GET /api/jobs/{jobId}` | Query state, progress, failures, and statistics |
-| `GET /api/events` | Query calendar/list results with dynamic filters |
-| `GET /api/events/{eventId}` | Load detail, evidence-backed analysis, and source link |
-| `POST /api/channels` | Create a notification channel |
-| `POST /api/channels/{id}/test` | Send a safe test message |
-| `POST /api/channels/{id}/clear-secret` | Remove saved secret explicitly |
-| `DELETE /api/channels/{id}` | Delete channel after confirmation |
+| `GET /api/profiles/{id}/config` | 获取当前正式配置和草稿 |
+| `PATCH /api/profiles/{id}/config` | 保存草稿中的字段或卡片修改 |
+| `POST /api/profiles/{id}/publish` | 校验并发布一个新配置版本 |
+| `POST /api/profiles/{id}/run` | 使用正式配置立即创建任务 |
+| `GET /api/jobs/{jobId}` | 查询任务进度、失败原因和统计信息 |
+| `GET /api/events` | 获取日历和列表活动结果 |
+| `GET /api/events/{eventId}` | 获取活动详情、分析和原文链接 |
+| `POST /api/channels` | 新增推送通道 |
+| `POST /api/channels/{id}/test` | 发送安全测试消息 |
+| `POST /api/channels/{id}/clear-secret` | 明确清除已经保存的密钥 |
+| `DELETE /api/channels/{id}` | 确认后删除推送通道 |
 
-## 19. Error Handling
+`GET` 表示读取数据，`POST` 表示创建或执行操作，`PATCH` 表示局部修改，`DELETE` 表示删除。
 
-- Source failures are isolated; one source cannot cancel the complete run.
-- HTTP 429 and temporary 5xx failures retry with exponential backoff.
-- Permanent 4xx errors disable automatic retry and appear in run details.
-- Parser failures preserve raw documents for diagnosis.
-- LLM invalid structured output retries once with validation errors.
-- Notification failures retry independently and do not remove published events.
-- Job steps use idempotency keys so retries cannot create duplicate events or messages.
+## 19. 异常处理
 
-## 20. English Glossary
+- 某一个来源抓取失败，不能取消其他来源的任务。
+- 网络限流或服务器临时错误，采用逐渐延长等待时间的自动重试。
+- 地址不存在、权限不足等永久错误不无限重试。
+- 网页解析失败时保留原网页和失败原因，方便修复采集器。
+- 大模型输出不符合规定结构时，带着校验错误重试一次。
+- 推送失败单独重试，不撤销已经发布的活动。
+- 每个任务步骤使用唯一操作编号，避免重试产生重复活动或重复消息。
 
-| Term | Chinese explanation |
+## 20. 常见英文术语说明
+
+| 英文 | 中文解释 |
 | --- | --- |
-| API | 应用程序接口，前后端通过它交换数据 |
-| Agent | 可选择搜索、打开网页等工具并按目标行动的模型执行单元 |
+| API | 应用程序接口，前端和后端通过它交换数据 |
+| Agent | 可以选择搜索、打开网页等工具并围绕目标行动的模型执行单元 |
 | LLM | Large Language Model，大语言模型 |
-| Prompt | 发给模型的任务说明、约束和输出格式 |
-| SDK | Software Development Kit，厂商提供的调用代码包 |
-| Worker | 后台执行抓取、总结、推送任务的进程 |
-| Scheduler | 按时间创建任务的调度器 |
+| Prompt | 提示词，发给大模型的任务说明、约束和输出格式 |
+| SDK | Software Development Kit，服务厂商提供的调用代码包 |
+| Worker | 后台任务执行进程，负责抓取、总结和推送 |
+| Scheduler | 定时调度器，负责按计划创建后台任务 |
 | Webhook | 系统向指定网络地址主动发送消息的机制 |
-| SendKey | ServerChan 用于识别接收账户的发送密钥 |
+| SendKey | Server酱用来识别消息接收账户的发送密钥 |
 | Draft | 草稿，尚未影响正式任务的配置 |
 | Published | 已发布，下一次任务正式使用的配置 |
-| Snapshot | 快照，某次任务使用的完整不可变配置副本 |
-| Canonical URL | 标准原文地址，代表活动的官方或首选页面 |
-| Evidence | 支撑字段或结论的网页证据 |
-| Confidence | 可信度，系统对某个判断可靠程度的数值表达 |
-| Candidate | 候选活动，尚未通过完整核验和发布 |
-| Normalize | 标准化，把不同来源的数据转换为统一格式 |
-| Deduplicate | 去重，判断多个页面是否描述同一个活动 |
-| Merge | 合并，把同一活动的多来源证据组合为一条记录 |
-| Idempotency | 幂等，同一操作重试多次也只产生一次最终效果 |
+| Snapshot | 快照，某次任务使用的完整、不可变配置副本 |
+| Canonical URL | 标准原文地址，一场活动最正式或最可信的页面 |
+| Evidence | 证据，支撑某个字段或结论的网页原文 |
+| Confidence | 可信度，表示系统对判断可靠程度的数值 |
+| Candidate | 候选活动，尚未完成核验和正式发布 |
+| Normalize | 标准化，把不同网页的数据转换成统一格式 |
+| Deduplicate | 去重，判断多个网页是否描述同一场活动 |
+| Merge | 合并，把同一活动的多个来源和证据整理成一条记录 |
+| Idempotency | 幂等，同一个操作重试多次也只产生一次最终结果 |
 | Backoff | 退避重试，失败后逐渐延长等待时间 |
-| UUID | 通用唯一标识符，用于稳定识别配置项和数据记录 |
-| UTC | 世界协调时间，`UTC+8` 表示比UTC快8小时 |
+| UUID | 通用唯一编号，用来稳定识别配置项和数据记录 |
+| UTC | 世界协调时间，UTC+8表示比世界协调时间快8小时 |
 
-## 21. Acceptance Criteria
+## 21. 验收标准
 
-### Configuration
+### 21.1 运营配置
 
-- All five prototype sections persist through backend APIs.
-- Every collection card supports create, edit, enable/disable, and delete where applicable.
-- Publishing creates a new immutable version and does not mutate running jobs.
-- Invalid fields identify the exact inline card without opening a drawer or modal.
-- Multiple Feishu and ServerChan channels can be configured, tested, disabled, cleared, and removed.
+- 原型五个栏目全部通过后端接口真实保存。
+- 目标人群、来源、城市、主题、活动类型和通道支持新增、编辑、停用和删除。
+- 发布配置后生成不可修改的新版本。
+- 运行中的任务不受新发布配置影响。
+- 输入错误时在当前卡片内提示，不打开抽屉或弹窗。
+- 可以配置、测试、停用、清除和删除多个飞书或 Server酱通道。
 
-### Search and Processing
+### 21.2 搜索与处理
 
-- Fixed sources and intelligent discovery both obey the published configuration snapshot.
-- Changing cities, topics, sources, or coverage affects the next job without code changes.
-- Duplicate activities from multiple sources result in one event with retained evidence.
-- Mandatory facts are never sourced only from generated model text.
+- 固定来源和智能探索都读取同一份任务配置快照。
+- 修改城市、主题、来源和覆盖天数后，下一次任务自动生效，不需要修改代码。
+- 多来源发现同一活动时只发布一条活动，同时保留所有有效证据。
+- 固定事实不能只来自大模型生成文本。
 
-### Activity Page
+### 21.3 活动页
 
-- Calendar starts on Monday and includes city labels.
-- Calendar and detail list use the same content width.
-- Configured 15/30/60-day ranges are available without exceeding search coverage.
-- High-value activities are visually prominent without adding excessive cards or borders.
-- Missing images and optional values do not leave empty layout areas.
-- Desktop and mobile layouts have no clipping, overlap, or hidden core content.
+- 日历从周一开始，并在活动中标明城市。
+- 日历和下方详情列表宽度一致。
+- 根据配置提供15天、30天和60天范围，但不超过实际搜索范围。
+- 高含金量活动具有明确视觉重点，但不增加大量边框和卡片。
+- 缺少图片或可选字段时不留下空白区域。
+- 桌面端和移动端没有内容裁切、重叠和文字溢出。
 
-### Reliability
+### 21.4 稳定性与安全
 
-- Re-running a failed step does not duplicate events or notifications.
-- A failed source or notification channel does not cancel unrelated successful work.
-- Secrets never appear in API responses, logs, HTML, or configuration snapshots.
+- 重试失败步骤不会重复创建活动或重复发送消息。
+- 单个来源或推送通道失败不影响其他成功结果。
+- 密钥不会出现在接口响应、日志、网页源码和任务配置快照中。
 
