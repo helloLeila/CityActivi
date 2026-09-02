@@ -13,7 +13,7 @@
 - 活动详情不依赖封面图，不突出报名人数。
 - 活动详情重点展示主办方、地点、活动价值、收获和提前准备。
 
-原型中的五个栏目本身就是本产品的**运营配置**：
+第一版同时建设公开活动站和一套独立的运营后台。当前原型中的配置页面就是运营后台的UI基线，以下五个栏目和已有字段全部保留：
 
 1. 搜寻范围
 2. 时间与地点
@@ -21,7 +21,12 @@
 4. 展示字段
 5. 推送与自动化
 
-第一版不再增加一套独立的“运营后台”。大模型密钥、数据库连接、抓取并发数等技术参数属于服务器部署配置，不放进原型的运营配置页面。
+运营后台与公开活动站使用不同访问入口和权限，但共用同一套排版、颜色、控件和设计令牌。大模型密钥、数据库连接、抓取并发数等技术参数放进原型现有的“推送与自动化”栏目，使用当前页面已有的区块、卡片、表单和行内编辑样式，不增加第六个左侧导航。
+
+所有改动遵守两条硬约束：
+
+- **UI视觉不重做**：不改变现有页面宽度、栏目顺序、导航位置、卡片编辑方式和主要操作位置。
+- **字段不丢失**：原型已经出现的配置字段全部进入正式数据模型和接口，不允许在开发过程中以“暂不支持”为理由删除。
 
 ## 2. 产品页面边界
 
@@ -37,19 +42,34 @@
 
 活动页不负责修改抓取来源、主题规则、推送通道或运行计划。
 
-### 2.2 配置页
+### 2.2 独立运营后台
 
-配置页用于决定：
+运营后台使用独立地址，例如 `/ops/`，登录后才能访问。它直接实现当前原型的配置页面，用于决定：
 
 - 系统去哪里找活动。
 - 哪些活动值得收录。
 - 搜索哪些城市和日期。
 - 活动页展示哪些内容。
 - 结果在什么时间推送到哪些通道。
+- 大模型使用哪个服务和模型。
+- 抓取任务使用多少并发、超时和重试次数。
+- 当前数据库连接是否可用，以及待应用的连接配置。
 
 点击“编辑”后，只展开当前卡片。其他卡片不进入编辑状态，也不自动滚动页面。
 
-### 2.3 不允许关闭的固定规则
+独立运营后台并不等于重新设计一套后台模板。不能引入传统业务系统常见的顶部深色栏、复杂表格、侧边抽屉和大面积统计卡片。当前原型的视觉层级、留白、浅色背景和行内编辑继续作为实现标准。
+
+### 2.3 访问与权限边界
+
+第一版采用单一运营角色，但系统预留权限字段：
+
+- 公开活动站无需登录，只提供只读活动数据。
+- 运营后台必须登录，才能读取配置状态和保存草稿。
+- 密钥类字段只能写入、替换或清除，不能读取明文。
+- 数据库连接修改、密钥清除和立即运行任务需要再次确认。
+- 所有发布、密钥修改和运行参数修改都写入审计记录。
+
+### 2.4 不允许关闭的固定规则
 
 以下规则是系统质量底线，不允许通过运营配置关闭：
 
@@ -62,26 +82,42 @@
 ## 3. 总体技术结构
 
 ```text
-Vue 3 前端
-  ├─ 活动页
-  └─ 运营配置页
-          ↓ 通过 HTTP API 访问
-FastAPI 后端
-  ├─ 配置版本管理
-  ├─ 活动查询接口
-  ├─ 推送通道管理
-  └─ 任务状态管理
-          ↓
-Python 后台任务执行器
+浏览器
+  ├─ 公开活动站 /                 Vue 3 + TypeScript
+  └─ 独立运营后台 /ops/           Vue 3 + TypeScript
+                ↓ HTTPS
+Nginx 统一入口
+  ├─ 提供两个前端的静态文件
+  ├─ 转发 /api/public/*
+  └─ 转发 /api/ops/*
+                ↓
+FastAPI 应用服务
+  ├─ 公开活动接口
+  ├─ 运营配置与发布接口
+  ├─ 登录、权限与审计
+  ├─ 推送通道和密钥管理
+  ├─ 系统运行参数管理
+  └─ 任务创建与状态查询
+                ↓
+PostgreSQL
+  ├─ 产品配置、活动和任务数据
+  ├─ 大模型调用与证据数据
+  └─ 运行参数、审计和推送记录
+                ↑
+Python 后台任务系统
+  ├─ Scheduler 定时调度器
+  ├─ Worker 后台任务执行器
   ├─ 固定来源采集器
   ├─ 智能探索 Agent
-  ├─ 网页正文提取
-  ├─ 活动去重与合并
-  ├─ 大模型结构化总结
-  ├─ 证据核验与含金量评分
-  └─ 页面发布与消息推送
-          ↓
-PostgreSQL 数据库
+  ├─ 内容提取、去重和合并
+  ├─ 大模型总结与事实核验
+  └─ 页面发布和消息推送
+                ↓
+外部服务
+  ├─ 活动网站和官方页面
+  ├─ 大模型 API
+  ├─ 地图路线 API
+  └─ 飞书、Server酱和通用 Webhook
 ```
 
 ### 3.1 技术栈及中文含义
@@ -100,6 +136,141 @@ PostgreSQL 数据库
 | PostgreSQL | 关系型数据库 | 保存配置、任务、活动和证据 | 使用方式与 Java 项目中的 MySQL/PostgreSQL 类似 |
 | Nginx | Web服务器和反向代理 | 提供 HTTPS、前端静态文件和接口转发 | 部署入口，不承担业务逻辑 |
 | Docker Compose | 多服务容器编排文件 | 一次启动前端、后端、任务进程和数据库 | 类似可执行的本地部署清单 |
+
+### 3.2 建议的代码仓库结构
+
+```text
+CityActivi/
+  apps/
+    public-web/              公开活动站 Vue 应用
+    ops-console/             独立运营后台 Vue 应用
+  packages/
+    ui/                      两个前端共享的基础控件和设计令牌
+    api-types/               根据后端接口生成的 TypeScript 类型
+  services/
+    api/                     FastAPI 接口服务
+    worker/                  抓取、总结、核验和推送任务
+    scheduler/               定时创建任务
+  migrations/               Alembic 数据库迁移脚本
+  deploy/
+    nginx/                   Nginx 配置
+    systemd/                 可选的 Linux 服务配置
+  docker-compose.yml
+  .env.example
+```
+
+公开活动站和运营后台是两个独立构建产物，因此可以分别部署、缓存和限制权限。两者通过 `packages/ui` 共用颜色、字体、间距、输入框、按钮和配置卡片组件，从代码层保证UI不会在实现时走样。
+
+### 3.3 公开活动站前端
+
+公开活动站使用 Vue 3 的组合式API和 TypeScript：
+
+- Vue Router 管理活动首页、活动详情和404页面。
+- Pinia 只保存日期范围、城市、主题等筛选状态，不把服务器活动数据长期复制到全局状态。
+- 活动列表通过后端分页接口读取；日期范围或筛选改变时取消旧请求，避免结果闪烁。
+- 日历和详情列表使用相同内容容器宽度。
+- 15天、30天和60天切换只查询对应范围，不一次把60天全部塞进首屏。
+- 活动详情中的原文链接直接跳转标准原文地址，不增加多余的“打开详情”按钮。
+
+### 3.4 独立运营后台前端
+
+运营后台同样使用 Vue 3 和 TypeScript，但拥有独立路由、登录状态和权限校验：
+
+- 每个原型栏目对应一个路由状态，但视觉上仍使用现有左侧栏目切换。
+- 每张配置卡片维护自己的编辑草稿，保存失败只影响当前卡片。
+- 页面级草稿状态记录哪些栏目尚未发布。
+- 离开页面前如果存在未保存的卡片内容，显示轻量确认提示。
+- 接口返回字段校验错误时，错误映射到具体卡片和输入项。
+- 所有选择器使用后端提供的可选值，不允许依赖前端写死城市和来源。
+- 技术参数沿用相同的 `section-block`、`setting-row`、配置卡片和行内展开样式。
+
+### 3.5 FastAPI 应用服务
+
+FastAPI 后端按领域拆分，不把所有逻辑写进接口文件：
+
+```text
+app/
+  api/                       HTTP 路由和权限检查
+  schemas/                   Pydantic 请求、响应和大模型结构
+  models/                    SQLAlchemy 数据库模型
+  repositories/              数据库查询和写入
+  services/                  配置发布、活动查询、推送等业务逻辑
+  security/                  登录、会话、加密和审计
+  settings/                  启动配置和运行参数
+```
+
+各层职责：
+
+- `api` 只负责接收请求、检查权限和返回响应。
+- `schemas` 定义字段类型、必填规则和枚举值。
+- `repositories` 只处理数据库，不调用大模型或网页。
+- `services` 负责事务边界和业务流程。
+- `security` 负责密码哈希、会话、密钥加密和敏感操作确认。
+
+后端根据 OpenAPI 接口说明自动生成前端 TypeScript 类型，避免前端把 `coverageDays` 写成字符串、后端却按整数处理。
+
+### 3.6 定时调度器与后台任务执行器
+
+第一版不引入 Celery、Redis、Temporal 或 DBOS。任务状态直接保存在 PostgreSQL：
+
+- Scheduler 定时调度器每分钟检查应该启动的助手配置。
+- 到达计划时间后，在 `job_runs` 中创建一条等待任务。
+- Worker 使用 PostgreSQL 的行锁安全领取任务。
+- 任务记录租约时间和心跳，Worker 异常退出后其他 Worker 可以重新领取。
+- 每个步骤保存状态、开始时间、完成时间、重试次数和错误摘要。
+- 发布和推送使用幂等编号，防止任务重试生成重复活动或重复消息。
+
+领取任务使用 PostgreSQL 的 `FOR UPDATE SKIP LOCKED` 机制：多个 Worker 可以并行读取任务，但同一条任务只会被其中一个 Worker 锁定并执行。这相当于使用数据库实现一个轻量任务队列，适合第一版和单台阿里云服务器。
+
+### 3.7 网页采集技术
+
+- `httpx`：异步发送 HTTP 请求，优先处理普通静态页面。
+- `BeautifulSoup`：解析 HTML 并提取标题、正文、链接和结构化数据。
+- `Playwright`：只在必须执行 JavaScript 才能看到内容时启动浏览器。
+- 每个来源使用独立采集器，实现统一的发现、抓取和解析接口。
+- 页面正文、响应状态、抓取时间、内容哈希和解析器版本全部保存。
+- Playwright 按需执行，避免在低配置服务器上长期占用大量内存。
+
+### 3.8 大模型调用层
+
+大模型调用使用供应商官方 Python SDK，并通过项目内部适配层统一：
+
+```text
+活动证据
+  → Prompt 模板
+  → 模型适配器
+  → Pydantic 结构校验
+  → 证据引用检查
+  → 保存 llm_runs
+```
+
+适配层屏蔽不同供应商在模型名称、接口地址和返回结构上的差异。业务代码只调用“总结活动”“判断类型”“补充搜索计划”等明确能力，不直接到处调用某一家模型SDK。
+
+每次调用保存提示词版本、模型、输入内容哈希、输出、耗时、Token数量、估算费用、错误和重试次数。大模型温度默认使用低值，保证同一活动多次处理时结果相对稳定。
+
+### 3.9 PostgreSQL 与 SQLAlchemy
+
+后端使用 SQLAlchemy 2.x 风格模型和事务，数据库驱动使用 `asyncpg`：
+
+- 时间统一保存为带时区的 `timestamptz`。
+- 主键使用 UUID，避免不同任务或服务生成冲突编号。
+- 配置快照、模型结构化输出等变化较快的数据使用 `jsonb`。
+- 经常筛选和关联的字段使用普通列，不能把所有数据都塞进 JSON。
+- 活动发布时间、开始时间、城市、状态和标准原文地址建立索引。
+- Alembic 管理每次字段新增、约束修改和索引变化。
+
+### 3.10 Nginx 与部署
+
+Nginx 是外部唯一入口：
+
+- `/` 提供公开活动站。
+- `/ops/` 提供独立运营后台。
+- `/api/public/` 转发公开只读接口。
+- `/api/ops/` 转发需要登录的运营接口。
+- `/assets/` 使用长期缓存，HTML 不使用长期缓存。
+- 统一处理 HTTPS、请求大小和基础限流。
+
+Docker Compose 运行 PostgreSQL、API、Worker、Scheduler 和 Nginx。前端在构建阶段生成静态文件，不需要常驻 Node.js 进程。对于配置较低的服务器，Worker 默认单进程，网页抓取并发可在运营后台调整，Playwright 浏览器数量设置独立上限。
 
 ## 4. 配置的保存、发布和生效
 
@@ -394,10 +565,11 @@ PostgreSQL 数据库
 
 - 自动化名称。
 - 当前运行计划。
+- Prompt文件及当前提示词版本。
+- 最近更新时间。
 - 当前生效的配置版本。
 - 最近一次运行时间和结果。
 - 下一次计划运行时间。
-- 最近一次发布配置的时间。
 
 “本地预检”在生产环境中改为“运行预检”，但保持原有按钮位置。预检检查：
 
@@ -408,6 +580,146 @@ PostgreSQL 数据库
 - 已启用推送通道是否可以发送测试消息。
 
 预检不抓取正式活动，也不向活动页发布结果。
+
+原型中的“重新生成自动化”按钮保留原位置和名称。生产环境点击后执行：
+
+1. 根据当前已发布配置重新生成标准化任务定义。
+2. 固化本次使用的 Prompt 版本和模型任务说明。
+3. 重新计算下一次运行时间。
+4. 校验 Scheduler 是否已经加载新定义。
+5. 返回新任务定义版本、更新时间和下一次运行时间。
+
+Prompt文件不再作为唯一真实配置来源。数据库中的已发布配置和任务定义版本是正式依据，Prompt文件只作为可查看、可审计和可导出的生成结果。
+
+### 9.3 大模型服务配置
+
+大模型配置放在“推送与自动化”栏目中，位于自动化状态下方，继续使用现有 `section-block` 和 `setting-row` 样式。
+
+| 字段 | 控件 | 默认建议 | 生效方式 |
+| --- | --- | --- | --- |
+| 服务名称 | 输入框 | 主总结模型 | 仅用于后台识别 |
+| 服务商 | 下拉选择 | 已实现的模型适配器 | 下一次模型调用生效 |
+| 接口地址 | 输入框 | 服务商默认地址 | 下一次模型调用生效 |
+| 模型名称 | 可搜索选择或输入 | 由服务商提供 | 下一次模型调用生效 |
+| API密钥 | 密码输入框 | 无 | 保存后只显示已配置 |
+| 请求超时 | 数字选择 | 60秒 | 下一次模型调用生效 |
+| 输出最大长度 | 数字选择 | 由任务类型设置默认值 | 下一次模型调用生效 |
+| 温度 | 数字选择 | 0.2 | 控制输出随机性 |
+| 单次任务费用上限 | 金额输入 | 运营人员设置 | 超限后停止非必要调用 |
+| 备用模型 | 可选选择 | 无 | 主模型连续失败后使用 |
+| 是否启用 | 开关 | 启用 | 控制该模型服务是否可用 |
+
+每个模型配置卡片提供：
+
+- 测试连接：发送最小测试请求，不包含活动隐私数据。
+- 测试结构化输出：检查模型能否按 Pydantic 规定格式返回。
+- 替换密钥：只允许覆盖，不能读取原密钥。
+- 清除密钥：二次确认后删除加密值。
+- 查看最近成功时间、平均耗时和最近错误。
+
+模型配置保存到 `model_providers`，API密钥保存到独立的 `secret_values`。活动任务快照只保存模型配置编号和模型名称，不包含密钥明文。
+
+### 9.4 网页抓取运行参数
+
+抓取参数与大模型配置并列显示，字段全部使用选择器或有上下限的数字输入，避免误填导致服务器失控。
+
+| 字段 | 默认建议 | 允许范围 | 说明 |
+| --- | ---: | ---: | --- |
+| 普通网页并发数 | 4 | 1至16 | 同时使用 httpx 抓取的页面数 |
+| 浏览器并发数 | 1 | 0至3 | 同时运行的 Playwright 浏览器页面数 |
+| 单页请求超时 | 20秒 | 5至120秒 | 单次网页请求最长等待时间 |
+| 最大重试次数 | 2 | 0至5 | 临时网络错误的重试次数 |
+| 同域名最小间隔 | 1.5秒 | 0.5至30秒 | 防止短时间请求同一网站过多 |
+| 单页最大体积 | 5MB | 1至20MB | 超过限制时停止下载正文 |
+| JavaScript页面回退 | 启用 | 开关 | 普通抓取无内容时是否尝试 Playwright |
+| 代理地址 | 空 | 可选 | 仅在明确配置代理时使用 |
+| 自定义 User-Agent | 系统默认 | 可选 | 网页请求标识，不允许伪装浏览器安全信息 |
+
+修改并保存后写入 `system_settings`，新领取的任务使用新参数，已经在执行的网页请求不被中途取消。
+
+为防止低配置服务器失控，后端还保留不可突破的安全上限。例如运营页面即使提交普通网页并发100，后端也会拒绝，而不是相信前端校验。
+
+### 9.5 数据库连接配置
+
+运营后台提供数据库连接卡片，但数据库连接不能只保存在 PostgreSQL 自身。原因是：一旦当前数据库无法连接，API就无法从数据库读取“应该连接哪个数据库”。这属于启动自依赖问题。
+
+因此数据库配置采用两层设计：
+
+```text
+运营后台数据库卡片
+  → 测试候选连接
+  → 保存到服务器外部待应用配置
+  → Runtime Controller 应用
+  → 重启 API、Worker、Scheduler
+  → 健康检查
+  → 成功确认或自动回滚
+```
+
+数据库卡片字段：
+
+| 字段 | 是否必填 | 说明 |
+| --- | --- | --- |
+| 连接名称 | 是 | 例如“CityActivi生产数据库” |
+| 主机地址 | 是 | PostgreSQL服务器域名或内网地址 |
+| 端口 | 是 | 默认5432 |
+| 数据库名称 | 是 | 例如 `cityactivi` |
+| 用户名 | 是 | 应用专用数据库账户 |
+| 密码 | 是 | 只写字段，保存后不回显 |
+| SSL模式 | 是 | disable、prefer、require、verify-full |
+| 连接池大小 | 是 | 默认5，控制常驻连接数 |
+| 最大临时连接 | 是 | 默认5，控制高峰附加连接数 |
+| 连接超时 | 是 | 默认10秒 |
+| 应用状态 | 系统显示 | 当前生效、待应用、应用失败、已回滚 |
+
+按钮及行为：
+
+- `测试连接`：使用候选配置执行连接、`SELECT 1`、数据库版本检查和必要扩展检查，不修改当前连接。
+- `保存待应用`：把候选配置加密写入服务器配置目录，不立即中断系统。
+- `应用并重启`：调用只监听本机 Unix Socket 的 Runtime Controller。
+- `撤销待应用`：删除尚未生效的候选配置。
+- `恢复上一版本`：恢复最近一次确认成功的运行配置。
+
+Runtime Controller 是一个很小的本机运行控制服务，不暴露公网端口，只负责：
+
+- 写入 `/etc/cityactivi/runtime.env`，文件权限设为仅服务账户可读。
+- 保存上一版可用配置。
+- 重启 API、Worker 和 Scheduler。
+- 调用健康检查接口。
+- 健康检查失败时恢复上一版并再次重启。
+
+数据库密码既不写入业务数据库，也不进入 Git、日志、接口响应和任务快照。
+
+### 9.6 技术配置在现有UI中的位置
+
+左侧导航仍然只有原型现有五项。“推送与自动化”内部按以下顺序纵向排列：
+
+1. 推送通道。
+2. 自动化状态。
+3. 大模型服务。
+4. 网页抓取参数。
+5. 数据库连接。
+
+新增内容使用和现有页面完全相同的标题行、设置行、配置卡片、状态文字和按钮层级。默认只展示配置摘要；点击当前卡片的“编辑”后在原位置展开常用字段，低频字段放进卡片内部的“更多设置”。
+
+不允许为了容纳技术字段做以下改动：
+
+- 不增加新的左侧导航。
+- 不改成表格密集型后台。
+- 不使用右侧抽屉或全屏弹窗。
+- 不删除原来的推送、自动化状态和预检内容。
+- 不改变顶部“预览页面”和“发布更新”的位置。
+
+### 9.7 产品配置与技术配置的生效差异
+
+| 配置类型 | 保存位置 | 是否进入活动任务快照 | 生效时间 |
+| --- | --- | --- | --- |
+| 搜寻、城市、主题、展示 | `config_versions` | 是 | 发布后的下一任务 |
+| 推送通道路由 | `config_versions`和通道表 | 是，不包含密钥 | 发布后的下一任务 |
+| 大模型模型选择 | `model_providers`和快照引用 | 是，不包含密钥 | 下一次模型调用 |
+| 抓取并发和超时 | `system_settings` | 任务记录参数版本 | 新领取的任务 |
+| 主数据库连接 | 服务器运行配置文件 | 否 | 应用并重启成功后 |
+
+技术配置不会混入普通运营配置版本的 JSON 中，但都在同一个运营后台页面完成管理。这样既保持原型的统一体验，也避免数据库连接、密钥等服务器级配置被错误复制到每一次任务快照。
 
 ## 10. 配置如何影响活动首页
 
@@ -475,7 +787,7 @@ PostgreSQL 数据库
 城市：深圳
 主题：Agent、RAG、MCP
 活动类型：业界、开源
-日期：2026-09-02 至 2026-09-16
+日期：2026-09-03 至 2026-09-17
 来源：Luma
 ```
 
@@ -593,49 +905,717 @@ PostgreSQL 数据库
 
 活动最终是否收录，还要继续应用对应城市的收录门槛和通勤规则。
 
-## 17. 核心数据库表
+## 17. 数据库字段详细设计
 
-| 表名 | 中文用途 |
+### 17.1 PostgreSQL 字段规范
+
+- 所有业务主键使用 `uuid`。
+- 所有时间使用 `timestamptz`，即带时区时间。
+- 金额使用 `numeric(12,4)`，不使用浮点数。
+- 经纬度使用 `numeric(10,7)`。
+- 状态字段第一版使用受约束的 `varchar`，避免数据库枚举升级困难。
+- 创建时间和更新时间统一使用 `created_at`、`updated_at`。
+- 可搜索的固定事实使用普通列，配置快照和模型输出使用 `jsonb`。
+- 密钥不使用普通 `text` 保存，统一进入加密密钥表。
+
+### 17.2 运营用户表 `ops_users`
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `id` | uuid | 主键 | 运营用户编号 |
+| `email` | varchar(255) | 非空、唯一 | 登录账号 |
+| `password_hash` | text | 非空 | Argon2id 密码哈希，不保存原密码 |
+| `display_name` | varchar(100) | 非空 | 页面显示名称 |
+| `role` | varchar(32) | 非空、默认 operator | 预留管理员和运营角色 |
+| `is_active` | boolean | 非空、默认 true | 是否允许登录 |
+| `last_login_at` | timestamptz | 可空 | 最近成功登录时间 |
+| `created_at` | timestamptz | 非空 | 创建时间 |
+| `updated_at` | timestamptz | 非空 | 更新时间 |
+
+索引：`email` 唯一索引，`is_active` 普通索引。
+
+### 17.3 登录会话表 `ops_sessions`
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `id` | uuid | 主键 | 会话编号 |
+| `user_id` | uuid | 外键、非空 | 关联运营用户 |
+| `token_hash` | text | 非空、唯一 | 会话令牌哈希 |
+| `csrf_hash` | text | 非空 | 防跨站请求令牌哈希 |
+| `ip_address` | inet | 可空 | 登录IP |
+| `user_agent` | text | 可空 | 浏览器标识 |
+| `last_seen_at` | timestamptz | 非空 | 最近活动时间 |
+| `expires_at` | timestamptz | 非空 | 到期时间 |
+| `revoked_at` | timestamptz | 可空 | 主动退出或撤销时间 |
+| `created_at` | timestamptz | 非空 | 创建时间 |
+
+索引：`token_hash` 唯一索引，`user_id, expires_at` 组合索引。
+
+### 17.4 活动助手表 `assistant_profiles`
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `id` | uuid | 主键 | 活动助手编号 |
+| `slug` | varchar(80) | 非空、唯一 | URL和系统识别名称 |
+| `name` | varchar(120) | 非空 | 例如“线下技术活动情报晨报” |
+| `region_label` | varchar(100) | 非空 | 页面展示区域名称 |
+| `timezone` | varchar(64) | 非空 | 默认 Asia/Shanghai |
+| `published_config_id` | uuid | 可空、外键 | 当前正式配置版本 |
+| `draft_config_id` | uuid | 可空、外键 | 当前草稿版本 |
+| `is_active` | boolean | 非空、默认 true | 是否允许定时创建任务 |
+| `created_by` | uuid | 外键、非空 | 创建人 |
+| `created_at` | timestamptz | 非空 | 创建时间 |
+| `updated_at` | timestamptz | 非空 | 更新时间 |
+
+### 17.5 配置版本表 `config_versions`
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `id` | uuid | 主键 | 配置版本编号 |
+| `profile_id` | uuid | 外键、非空 | 所属活动助手 |
+| `version_number` | integer | 非空 | 同一助手内递增版本号 |
+| `status` | varchar(20) | 非空 | draft、published、archived |
+| `base_version_id` | uuid | 可空、外键 | 草稿基于哪个正式版本创建 |
+| `schema_version` | integer | 非空 | 配置JSON结构版本 |
+| `config_json` | jsonb | 非空 | 完整、标准化配置 |
+| `checksum` | char(64) | 非空 | 配置内容 SHA-256 校验值 |
+| `change_summary` | text | 可空 | 本次发布说明 |
+| `created_by` | uuid | 外键、非空 | 创建人 |
+| `published_by` | uuid | 可空、外键 | 发布人 |
+| `published_at` | timestamptz | 可空 | 发布时间 |
+| `created_at` | timestamptz | 非空 | 创建时间 |
+| `updated_at` | timestamptz | 非空 | 更新时间 |
+
+约束和索引：
+
+- `profile_id, version_number` 唯一。
+- 同一 `profile_id` 只能有一个状态为 draft 的当前草稿。
+- 发布后禁止修改 `config_json`，只能创建下一版本。
+- `config_json` 建 GIN 索引只用于后台诊断，不作为主要业务查询方式。
+
+### 17.6 完整配置 JSON 字段
+
+`config_versions.config_json` 必须包含原型的全部字段，不允许丢失：
+
+```json
+{
+  "region": "大湾区",
+  "target_count": 12,
+  "hide_expired": true,
+  "schedule": {
+    "frequency": "daily",
+    "time": "07:00",
+    "coverage_days": 15,
+    "timezone": "Asia/Shanghai"
+  },
+  "origin": {
+    "name": "深大地铁站",
+    "address": "深圳市南山区深大地铁站",
+    "latitude": 0,
+    "longitude": 0,
+    "travel_mode": "transit",
+    "map_provider": "amap",
+    "map_url": ""
+  },
+  "cities": [],
+  "audiences": [],
+  "sources": [],
+  "discovery": {},
+  "topics": [],
+  "weak_content_rules": [],
+  "event_types": [],
+  "sort": {
+    "primary": "start_time",
+    "secondary": "relevance"
+  },
+  "preferences": {
+    "prefer_chinese_title": true,
+    "hide_unknown": true
+  },
+  "display_fields": {
+    "community": true,
+    "topic": true,
+    "source": true,
+    "why": true,
+    "travel": true,
+    "registered": false,
+    "cost": false,
+    "source_link": true,
+    "cover": false,
+    "takeaways": true,
+    "prerequisites": true
+  },
+  "output": {
+    "summary_length": "full",
+    "push_style": "key_content",
+    "time_format": "24h",
+    "timezone_mode": "assistant"
+  },
+  "channel_routes": []
+}
+```
+
+其中 `cities`、`audiences`、`sources`、`topics`、`weak_content_rules`、`event_types` 和 `channel_routes` 中的每一项都必须有稳定 UUID、名称、启用状态和排序序号。
+
+### 17.7 加密密钥表 `secret_values`
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `id` | uuid | 主键 | 密钥编号 |
+| `scope` | varchar(40) | 非空 | model、channel、map 等用途 |
+| `name` | varchar(120) | 非空 | 后台识别名称 |
+| `ciphertext` | bytea | 非空 | AES-256-GCM 加密内容 |
+| `nonce` | bytea | 非空 | 加密随机数 |
+| `key_version` | integer | 非空 | 主加密密钥版本 |
+| `fingerprint` | varchar(32) | 非空 | 用于识别是否替换，不可反推原文 |
+| `created_by` | uuid | 外键、非空 | 创建人 |
+| `rotated_at` | timestamptz | 可空 | 最近轮换时间 |
+| `last_used_at` | timestamptz | 可空 | 最近使用时间 |
+| `created_at` | timestamptz | 非空 | 创建时间 |
+
+主加密密钥来自服务器环境，不保存到数据库。数据库泄露时，攻击者不能仅凭 `secret_values` 解密API密钥。
+
+### 17.8 大模型服务表 `model_providers`
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `id` | uuid | 主键 | 模型配置编号 |
+| `name` | varchar(120) | 非空 | 运营后台显示名称 |
+| `provider_type` | varchar(40) | 非空 | 模型适配器类型 |
+| `base_url` | text | 非空 | API接口地址 |
+| `model_name` | varchar(160) | 非空 | 模型名称 |
+| `secret_id` | uuid | 外键、非空 | API密钥引用 |
+| `timeout_seconds` | integer | 非空 | 请求超时 |
+| `max_output_tokens` | integer | 非空 | 最大输出Token数 |
+| `temperature` | numeric(3,2) | 非空 | 输出随机程度 |
+| `job_budget` | numeric(12,4) | 可空 | 单任务费用上限 |
+| `fallback_provider_id` | uuid | 可空、外键 | 备用模型配置 |
+| `is_enabled` | boolean | 非空 | 是否允许调用 |
+| `last_test_status` | varchar(20) | 可空 | 最近测试结果 |
+| `last_test_at` | timestamptz | 可空 | 最近测试时间 |
+| `last_error` | text | 可空 | 最近错误摘要 |
+| `created_at` | timestamptz | 非空 | 创建时间 |
+| `updated_at` | timestamptz | 非空 | 更新时间 |
+
+### 17.9 系统运行参数表 `system_settings`
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `key` | varchar(120) | 主键 | 例如 `crawler.http_concurrency` |
+| `category` | varchar(40) | 非空 | crawler、runtime、map 等分类 |
+| `value_json` | jsonb | 非空 | 参数值 |
+| `value_type` | varchar(20) | 非空 | integer、boolean、string、object |
+| `revision` | integer | 非空 | 每次修改递增 |
+| `updated_by` | uuid | 外键、非空 | 修改人 |
+| `applied_at` | timestamptz | 可空 | 实际生效时间 |
+| `created_at` | timestamptz | 非空 | 创建时间 |
+| `updated_at` | timestamptz | 非空 | 更新时间 |
+
+数据库连接密码不进入该表。
+
+### 17.10 数据库运行配置修订表 `runtime_config_revisions`
+
+该表只保存数据库配置的非敏感摘要和应用结果，完整连接配置保存在服务器外部加密文件。
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `id` | uuid | 主键 | 修订编号 |
+| `config_type` | varchar(32) | 非空 | 第一版为 database |
+| `revision` | integer | 非空、唯一 | 运行配置版本 |
+| `status` | varchar(24) | 非空 | pending、testing、applied、failed、rolled_back |
+| `host_masked` | varchar(255) | 非空 | 脱敏主机地址 |
+| `database_name` | varchar(100) | 非空 | 数据库名称 |
+| `username_masked` | varchar(100) | 非空 | 脱敏用户名 |
+| `ssl_mode` | varchar(20) | 非空 | SSL模式 |
+| `config_checksum` | char(64) | 非空 | 外部配置文件校验值 |
+| `test_result` | jsonb | 可空 | 延迟、版本和检查结果 |
+| `previous_revision_id` | uuid | 可空、外键 | 上一个可回滚版本 |
+| `created_by` | uuid | 外键、非空 | 操作人 |
+| `tested_at` | timestamptz | 可空 | 测试时间 |
+| `applied_at` | timestamptz | 可空 | 应用时间 |
+| `created_at` | timestamptz | 非空 | 创建时间 |
+
+### 17.11 任务表 `job_runs`
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `id` | uuid | 主键 | 任务编号 |
+| `profile_id` | uuid | 外键、非空 | 所属助手 |
+| `config_version_id` | uuid | 外键、非空 | 使用的正式配置版本 |
+| `trigger_type` | varchar(20) | 非空 | scheduled、manual、publish_run |
+| `status` | varchar(24) | 非空 | 当前任务状态 |
+| `current_step` | varchar(40) | 可空 | 当前执行阶段 |
+| `config_snapshot` | jsonb | 非空 | 启动时完整配置快照 |
+| `runtime_revision` | integer | 非空 | 抓取运行参数版本 |
+| `idempotency_key` | varchar(160) | 非空、唯一 | 防止重复创建任务 |
+| `scheduled_for` | timestamptz | 非空 | 计划时间 |
+| `started_at` | timestamptz | 可空 | 实际开始时间 |
+| `finished_at` | timestamptz | 可空 | 完成时间 |
+| `lease_owner` | varchar(120) | 可空 | 当前领取任务的Worker |
+| `lease_expires_at` | timestamptz | 可空 | 任务租约过期时间 |
+| `heartbeat_at` | timestamptz | 可空 | Worker最近心跳 |
+| `attempt_count` | integer | 非空、默认0 | 整体领取次数 |
+| `result_stats` | jsonb | 非空、默认空对象 | 抓取、候选、发布和推送数量 |
+| `error_code` | varchar(80) | 可空 | 最终错误代码 |
+| `error_message` | text | 可空 | 脱敏错误摘要 |
+| `created_at` | timestamptz | 非空 | 创建时间 |
+| `updated_at` | timestamptz | 非空 | 更新时间 |
+
+索引：`status, scheduled_for`、`profile_id, created_at desc`、`lease_expires_at`。
+
+### 17.12 任务步骤表 `job_steps`
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `id` | uuid | 主键 | 步骤编号 |
+| `job_id` | uuid | 外键、非空 | 所属任务 |
+| `step_name` | varchar(40) | 非空 | discovering、fetching 等 |
+| `status` | varchar(20) | 非空 | pending、running、completed、failed |
+| `attempt_number` | integer | 非空 | 当前步骤第几次执行 |
+| `input_refs` | jsonb | 非空 | 输入记录编号 |
+| `output_stats` | jsonb | 非空 | 输出统计 |
+| `started_at` | timestamptz | 可空 | 开始时间 |
+| `finished_at` | timestamptz | 可空 | 完成时间 |
+| `error_code` | varchar(80) | 可空 | 错误代码 |
+| `error_message` | text | 可空 | 脱敏错误摘要 |
+
+唯一约束：`job_id, step_name, attempt_number`。
+
+### 17.13 搜索任务表 `search_tasks`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | uuid | 搜索任务编号 |
+| `job_id` | uuid | 所属任务 |
+| `source_item_id` | uuid | 配置快照中的来源编号 |
+| `city_code` | varchar(32) | 城市标准编号 |
+| `logical_query` | jsonb | 城市、主题、日期等结构化条件 |
+| `rendered_query` | text | 实际发送给来源的查询内容 |
+| `priority` | integer | 执行优先级 |
+| `status` | varchar(20) | 执行状态 |
+| `candidate_count` | integer | 发现的候选数量 |
+| `started_at` | timestamptz | 开始时间 |
+| `finished_at` | timestamptz | 完成时间 |
+| `error_message` | text | 错误摘要 |
+
+### 17.14 原始网页表 `raw_documents`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | uuid | 网页记录编号 |
+| `job_id` | uuid | 所属任务 |
+| `search_task_id` | uuid | 来源搜索任务，可空 |
+| `source_item_id` | uuid | 来源配置编号 |
+| `url` | text | 实际请求地址 |
+| `canonical_url` | text | 页面声明或系统归一化后的标准地址 |
+| `http_status` | integer | HTTP响应状态 |
+| `content_type` | varchar(120) | 内容类型 |
+| `content_hash` | char(64) | 正文哈希，用于避免重复解析 |
+| `response_headers` | jsonb | 经过过滤的响应头 |
+| `raw_body_gzip` | bytea | 有体积上限的压缩原文 |
+| `extracted_text` | text | 清洗后的正文 |
+| `structured_data` | jsonb | JSON-LD等结构化数据 |
+| `language` | varchar(16) | 页面语言 |
+| `parser_version` | varchar(40) | 使用的解析器版本 |
+| `fetched_at` | timestamptz | 抓取时间 |
+| `error_message` | text | 抓取或解析错误 |
+
+索引：`canonical_url`、`content_hash`、`job_id, fetched_at`。
+
+### 17.15 候选活动表 `event_candidates`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | uuid | 候选活动编号 |
+| `job_id` | uuid | 所属任务 |
+| `status` | varchar(24) | extracted、merged、verified、rejected |
+| `title` | text | 原始优选标题 |
+| `normalized_title` | text | 去重用标准标题 |
+| `start_at` | timestamptz | 开始时间 |
+| `end_at` | timestamptz | 结束时间，可空 |
+| `timezone` | varchar(64) | 活动时区 |
+| `city_code` | varchar(32) | 城市编号 |
+| `venue_name` | text | 场地名称 |
+| `venue_address` | text | 详细地址 |
+| `latitude` | numeric(10,7) | 纬度 |
+| `longitude` | numeric(10,7) | 经度 |
+| `organizer_name` | text | 主办方显示名称 |
+| `normalized_organizer` | text | 去重用主办方名称 |
+| `canonical_url` | text | 标准原文地址 |
+| `registration_url` | text | 报名地址 |
+| `description_text` | text | 合并前事实描述 |
+| `agenda_json` | jsonb | 议程结构 |
+| `source_keys` | jsonb | 各来源内部活动编号 |
+| `duplicate_group_key` | varchar(160) | 疑似重复分组 |
+| `fact_confidence` | numeric(4,3) | 事实可信度 |
+| `extracted_data` | jsonb | 其他提取字段 |
+| `created_at` | timestamptz | 创建时间 |
+| `updated_at` | timestamptz | 更新时间 |
+
+### 17.16 稳定活动表 `events`
+
+| 字段 | 类型 | 约束 | 说明 |
+| --- | --- | --- | --- |
+| `id` | uuid | 主键 | 一场逻辑活动的稳定编号 |
+| `identity_key` | varchar(180) | 非空、唯一 | 去重后稳定身份键 |
+| `canonical_url` | text | 可空、唯一 | 标准原文地址 |
+| `current_version_id` | uuid | 可空、外键 | 当前公开版本 |
+| `status` | varchar(20) | 非空 | active、cancelled、expired、hidden |
+| `first_seen_at` | timestamptz | 非空 | 首次发现时间 |
+| `last_seen_at` | timestamptz | 非空 | 最近一次仍存在的时间 |
+| `created_at` | timestamptz | 非空 | 创建时间 |
+| `updated_at` | timestamptz | 非空 | 更新时间 |
+
+### 17.17 活动版本表 `event_versions`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | uuid | 活动版本编号 |
+| `event_id` | uuid | 稳定活动编号 |
+| `job_id` | uuid | 生成该版本的任务 |
+| `version_number` | integer | 同一活动递增版本 |
+| `content_hash` | char(64) | 内容未变化时避免创建新版本 |
+| `title` | text | 活动标题 |
+| `start_at`、`end_at` | timestamptz | 开始和结束时间 |
+| `timezone` | varchar(64) | 活动时区 |
+| `city_code`、`city_name` | varchar | 城市编号和显示名称 |
+| `venue_name`、`venue_address` | text | 场地和地址 |
+| `latitude`、`longitude` | numeric | 经纬度 |
+| `organizer_name` | text | 主办方 |
+| `community_name` | text | 所属社区，可空 |
+| `event_type` | varchar(64) | 业界、学术、开源等 |
+| `topic_labels` | text[] | 技术主题标签 |
+| `summary` | text | 活动摘要 |
+| `why_worth` | jsonb | 为什么值得去的结构化内容 |
+| `takeaways` | jsonb | 收获列表 |
+| `prerequisites` | jsonb | 提前准备列表 |
+| `canonical_url` | text | 标准原文地址 |
+| `registration_url` | text | 报名入口 |
+| `cost_text` | text | 官方费用说明，可空 |
+| `cover_url` | text | 官方有效封面，可空 |
+| `commute_minutes` | integer | 通勤分钟数，可空 |
+| `commute_distance_meters` | integer | 通勤距离，可空 |
+| `commute_mode` | varchar(24) | 出行方式，可空 |
+| `quality_score` | numeric(5,2) | 含金量总分 |
+| `quality_level` | varchar(16) | high、medium、low |
+| `fact_confidence` | numeric(4,3) | 事实可信度 |
+| `published_at` | timestamptz | 发布时间 |
+| `created_at` | timestamptz | 创建时间 |
+
+唯一约束：`event_id, version_number`。主要索引：`start_at`、`city_code, start_at`、`quality_level, start_at`、`topic_labels` GIN 索引。
+
+### 17.18 活动证据表 `event_evidence`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | uuid | 证据编号 |
+| `event_version_id` | uuid | 关联活动版本 |
+| `raw_document_id` | uuid | 关联原始网页 |
+| `field_name` | varchar(80) | title、start_at、why_worth 等 |
+| `claim_text` | text | 页面中使用的事实或结论 |
+| `source_excerpt` | text | 支撑该字段的原文片段 |
+| `source_locator` | jsonb | CSS路径、JSON-LD路径或段落位置 |
+| `evidence_type` | varchar(20) | extracted、derived、generated |
+| `confidence` | numeric(4,3) | 该证据可信度 |
+| `is_primary` | boolean | 是否为该字段主要证据 |
+| `created_at` | timestamptz | 创建时间 |
+
+索引：`event_version_id, field_name`、`raw_document_id`。
+
+### 17.19 大模型调用表 `llm_runs`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | uuid | 调用编号 |
+| `job_id` | uuid | 所属任务 |
+| `candidate_id` | uuid | 关联候选活动，可空 |
+| `purpose` | varchar(40) | summary、classification、discovery 等 |
+| `provider_id` | uuid | 模型配置编号 |
+| `model_name` | varchar(160) | 实际模型名称 |
+| `prompt_version` | varchar(40) | 提示词版本 |
+| `input_hash` | char(64) | 输入内容哈希 |
+| `input_tokens` | integer | 输入Token数 |
+| `output_tokens` | integer | 输出Token数 |
+| `latency_ms` | integer | 调用耗时 |
+| `estimated_cost` | numeric(12,6) | 估算费用 |
+| `status` | varchar(20) | running、succeeded、failed |
+| `raw_output` | jsonb | 原始结构化响应 |
+| `validated_output` | jsonb | 校验通过后的输出 |
+| `error_code` | varchar(80) | 错误代码 |
+| `error_message` | text | 脱敏错误摘要 |
+| `started_at` | timestamptz | 开始时间 |
+| `finished_at` | timestamptz | 完成时间 |
+
+### 17.20 推送通道表 `notification_channels`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | uuid | 通道编号 |
+| `profile_id` | uuid | 所属助手 |
+| `name` | varchar(120) | 通道显示名称 |
+| `channel_type` | varchar(32) | feishu、serverchan、webhook |
+| `endpoint_secret_id` | uuid | 加密推送地址引用 |
+| `signing_secret_id` | uuid | 签名密钥或SendKey引用，可空 |
+| `delivery_scope` | varchar(24) | all、high_value |
+| `is_enabled` | boolean | 是否启用 |
+| `last_test_status` | varchar(20) | 最近测试状态 |
+| `last_test_at` | timestamptz | 最近测试时间 |
+| `last_error` | text | 最近错误摘要 |
+| `created_at` | timestamptz | 创建时间 |
+| `updated_at` | timestamptz | 更新时间 |
+
+### 17.21 推送记录表 `notification_deliveries`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | uuid | 推送记录编号 |
+| `job_id` | uuid | 所属任务 |
+| `channel_id` | uuid | 目标通道 |
+| `batch_key` | varchar(160) | 幂等推送编号，唯一 |
+| `status` | varchar(20) | pending、sent、retrying、failed |
+| `attempt_count` | integer | 已尝试次数 |
+| `payload_hash` | char(64) | 推送内容哈希 |
+| `response_status` | integer | 对方HTTP状态 |
+| `response_excerpt` | text | 脱敏响应摘要 |
+| `next_retry_at` | timestamptz | 下次重试时间 |
+| `sent_at` | timestamptz | 成功时间 |
+| `error_message` | text | 错误摘要 |
+| `created_at` | timestamptz | 创建时间 |
+| `updated_at` | timestamptz | 更新时间 |
+
+### 17.22 来源健康度表 `source_health`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `profile_id` | uuid | 所属助手 |
+| `source_item_id` | uuid | 配置中的来源编号 |
+| `last_job_id` | uuid | 最近任务 |
+| `last_success_at` | timestamptz | 最近成功时间 |
+| `consecutive_failures` | integer | 连续失败次数 |
+| `average_latency_ms` | integer | 平均响应时间 |
+| `last_http_status` | integer | 最近HTTP状态 |
+| `parser_status` | varchar(20) | healthy、degraded、broken |
+| `last_error` | text | 最近错误摘要 |
+| `updated_at` | timestamptz | 更新时间 |
+
+主键使用 `profile_id, source_item_id` 组合键。
+
+### 17.23 审计日志表 `audit_logs`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | uuid | 审计编号 |
+| `actor_user_id` | uuid | 操作人 |
+| `action` | varchar(80) | publish_config、replace_secret 等 |
+| `resource_type` | varchar(60) | config、channel、runtime 等 |
+| `resource_id` | uuid | 被操作记录，可空 |
+| `before_json` | jsonb | 修改前脱敏摘要 |
+| `after_json` | jsonb | 修改后脱敏摘要 |
+| `ip_address` | inet | 操作IP |
+| `request_id` | varchar(80) | 关联请求编号 |
+| `created_at` | timestamptz | 操作时间 |
+
+审计日志只记录密钥“已设置、已替换、已清除”，不能记录密钥值。
+
+### 17.24 主要数据关系
+
+```text
+ops_users
+  ├─ ops_sessions
+  ├─ config_versions.created_by / published_by
+  └─ audit_logs
+
+assistant_profiles
+  ├─ config_versions
+  ├─ job_runs
+  ├─ notification_channels
+  └─ source_health
+
+job_runs
+  ├─ job_steps
+  ├─ search_tasks
+  ├─ raw_documents
+  ├─ event_candidates
+  ├─ llm_runs
+  └─ notification_deliveries
+
+events
+  └─ event_versions
+       └─ event_evidence
+            └─ raw_documents
+```
+
+删除规则：
+
+- 正式配置、任务、活动版本、证据、模型调用和审计日志不做物理级联删除。
+- 运营页面的“删除来源”表示在新配置中删除该项，不删除历史任务快照。
+- 删除推送通道前检查是否存在发送中的记录；历史推送记录保留通道名称快照。
+- 活动下架通过状态字段实现，不删除历史版本和证据。
+
+### 17.25 关键事务边界
+
+| 操作 | 必须在同一数据库事务中完成的内容 |
 | --- | --- |
-| `assistant_profiles` | 保存一个活动助手的基本信息 |
-| `config_versions` | 保存草稿和不可修改的正式配置版本 |
-| `job_runs` | 保存任务状态、时间、统计和配置快照 |
-| `raw_documents` | 保存抓取到的网页内容和来源信息 |
-| `event_candidates` | 保存尚未正式发布的候选活动 |
-| `events` | 保存同一场活动的稳定身份 |
-| `event_versions` | 保存活动每次正式发布的内容版本 |
-| `event_evidence` | 保存字段或结论对应的原文证据 |
-| `llm_runs` | 保存大模型调用状态、输出、消耗和版本 |
-| `notification_channels` | 保存推送通道和加密密钥引用 |
-| `notification_deliveries` | 保存每次推送的成功、失败和重试记录 |
+| 发布配置 | 写入新版本、更新助手正式版本指针、写审计日志 |
+| 创建任务 | 写任务、配置快照和幂等键 |
+| 发布活动 | 创建或更新稳定活动、写活动版本、写证据、更新当前版本指针 |
+| 保存模型密钥 | 写加密密钥、更新模型引用、写审计日志 |
+| 创建推送 | 写推送记录和唯一批次编号 |
+
+外部网络调用不能放在长数据库事务中。正确顺序是先保存待执行状态，提交事务，再调用外部服务，最后用短事务更新结果。
 
 ## 18. 主要后端接口
 
+### 18.1 公开活动接口
+
 | 请求方式和地址 | 中文用途 |
 | --- | --- |
-| `GET /api/profiles/{id}/config` | 获取当前正式配置和草稿 |
-| `PATCH /api/profiles/{id}/config` | 保存草稿中的字段或卡片修改 |
-| `POST /api/profiles/{id}/publish` | 校验并发布一个新配置版本 |
-| `POST /api/profiles/{id}/run` | 使用正式配置立即创建任务 |
-| `GET /api/jobs/{jobId}` | 查询任务进度、失败原因和统计信息 |
-| `GET /api/events` | 获取日历和列表活动结果 |
-| `GET /api/events/{eventId}` | 获取活动详情、分析和原文链接 |
-| `POST /api/channels` | 新增推送通道 |
-| `POST /api/channels/{id}/test` | 发送安全测试消息 |
-| `POST /api/channels/{id}/clear-secret` | 明确清除已经保存的密钥 |
-| `DELETE /api/channels/{id}` | 确认后删除推送通道 |
+| `GET /api/public/events` | 按日期、城市、主题、类型和含金量查询活动 |
+| `GET /api/public/events/{eventId}` | 获取活动详情和标准原文链接 |
+| `GET /api/public/filters` | 获取当前活动页可用的动态筛选项 |
+| `GET /api/public/calendar` | 获取指定日期范围内的日历摘要 |
+
+公开接口只返回已经发布的活动版本，不返回原始网页全文、运营配置、密钥状态和内部评分过程。
+
+### 18.2 运营登录接口
+
+| 请求方式和地址 | 中文用途 |
+| --- | --- |
+| `POST /api/ops/auth/login` | 校验账号密码并建立安全会话 |
+| `POST /api/ops/auth/logout` | 撤销当前会话 |
+| `GET /api/ops/auth/me` | 获取当前运营用户信息 |
+| `POST /api/ops/auth/change-password` | 修改当前用户密码并撤销其他会话 |
+
+登录成功后使用 `HttpOnly`、`Secure`、`SameSite=Lax` Cookie 保存会话，浏览器JavaScript不能读取会话令牌。
+
+### 18.3 运营配置接口
+
+| 请求方式和地址 | 中文用途 |
+| --- | --- |
+| `GET /api/ops/profiles/{id}/config` | 获取当前正式配置、草稿和版本号 |
+| `PATCH /api/ops/profiles/{id}/config` | 保存草稿字段或配置卡片 |
+| `POST /api/ops/profiles/{id}/validate` | 校验完整草稿但不发布 |
+| `POST /api/ops/profiles/{id}/publish` | 创建新的正式配置版本 |
+| `POST /api/ops/profiles/{id}/publish-and-run` | 发布并立即创建任务 |
+| `GET /api/ops/profiles/{id}/versions` | 查看历史版本 |
+| `POST /api/ops/profiles/{id}/versions/{versionId}/restore` | 从历史版本创建新草稿 |
+| `GET /api/ops/profiles/{id}/preview` | 使用草稿展示配置生成预览数据 |
+
+`PATCH` 请求必须携带草稿版本号。版本不一致时返回 HTTP 409，前端显示冲突而不是覆盖。
+
+### 18.4 任务接口
+
+| 请求方式和地址 | 中文用途 |
+| --- | --- |
+| `POST /api/ops/profiles/{id}/runs` | 使用当前正式配置立即创建任务 |
+| `GET /api/ops/jobs` | 分页查询任务历史 |
+| `GET /api/ops/jobs/{jobId}` | 查询任务步骤、进度和错误 |
+| `POST /api/ops/jobs/{jobId}/cancel` | 取消尚未发布的任务 |
+| `POST /api/ops/jobs/{jobId}/retry` | 从允许重试的失败步骤重新执行 |
+| `GET /api/ops/jobs/{jobId}/search-tasks` | 查看该任务实际生成的搜索条件 |
+
+立即运行请求使用客户端生成的幂等键。用户连续点击按钮不会创建多个相同任务。
+
+### 18.5 推送通道接口
+
+| 请求方式和地址 | 中文用途 |
+| --- | --- |
+| `POST /api/ops/channels` | 新增推送通道 |
+| `PATCH /api/ops/channels/{id}` | 修改名称、类型、范围和启用状态 |
+| `POST /api/ops/channels/{id}/replace-secret` | 替换地址或签名密钥 |
+| `POST /api/ops/channels/{id}/clear-secret` | 二次确认后清除密钥 |
+| `POST /api/ops/channels/{id}/test` | 发送测试消息 |
+| `DELETE /api/ops/channels/{id}` | 删除推送通道 |
+
+### 18.6 大模型和抓取参数接口
+
+| 请求方式和地址 | 中文用途 |
+| --- | --- |
+| `GET /api/ops/model-providers` | 获取脱敏后的模型配置列表 |
+| `POST /api/ops/model-providers` | 新增模型配置 |
+| `PATCH /api/ops/model-providers/{id}` | 修改非密钥参数 |
+| `POST /api/ops/model-providers/{id}/replace-key` | 写入或替换API密钥 |
+| `POST /api/ops/model-providers/{id}/test` | 测试连接和结构化输出 |
+| `GET /api/ops/system-settings/crawler` | 获取抓取参数和修订版本 |
+| `PATCH /api/ops/system-settings/crawler` | 校验并保存抓取参数 |
+
+### 18.7 数据库运行配置接口
+
+| 请求方式和地址 | 中文用途 |
+| --- | --- |
+| `GET /api/ops/runtime/database` | 获取脱敏后的当前和待应用状态 |
+| `POST /api/ops/runtime/database/test` | 测试候选数据库连接 |
+| `POST /api/ops/runtime/database/stage` | 保存待应用配置 |
+| `POST /api/ops/runtime/database/apply` | 调用本机控制服务应用并重启 |
+| `POST /api/ops/runtime/database/discard` | 撤销待应用配置 |
+| `POST /api/ops/runtime/database/rollback` | 恢复上一版成功配置 |
+
+这些接口不返回数据库密码。应用和回滚需要重新输入当前运营密码或一次性确认口令。
+
+### 18.8 状态与诊断接口
+
+| 请求方式和地址 | 中文用途 |
+| --- | --- |
+| `GET /api/ops/health/summary` | 获取数据库、模型、地图、来源和推送状态 |
+| `POST /api/ops/preflight` | 执行完整运行预检 |
+| `GET /api/ops/sources/health` | 获取每个来源的成功率和解析状态 |
+| `GET /api/ops/audit-logs` | 查询发布和敏感操作记录 |
 
 `GET` 表示读取数据，`POST` 表示创建或执行操作，`PATCH` 表示局部修改，`DELETE` 表示删除。
 
 ## 19. 异常处理
 
+### 19.1 接口错误格式
+
+所有接口使用统一错误结构：
+
+```json
+{
+  "code": "CONFIG_VERSION_CONFLICT",
+  "message": "正式配置已经被其他会话更新",
+  "field_errors": [
+    {
+      "path": "sources.4.url",
+      "message": "来源地址不可访问"
+    }
+  ],
+  "request_id": "请求追踪编号"
+}
+```
+
+前端根据 `path` 把错误显示到原型当前卡片内。页面顶部只显示简短总览，不用一条通用 Toast 代替具体错误。
+
+### 19.2 自动重试规则
+
+| 错误类型 | 是否重试 | 默认策略 |
+| --- | --- | --- |
+| 网络连接中断 | 是 | 最多2次，逐渐延长等待 |
+| HTTP 429限流 | 是 | 优先使用对方返回的等待时间 |
+| HTTP 500至599 | 是 | 最多2次 |
+| HTTP 401或403 | 否 | 标记凭证或权限错误 |
+| HTTP 404 | 否 | 标记来源页面失效 |
+| 网页结构变化 | 否自动重试 | 保存原文并标记解析器异常 |
+| 大模型超时 | 是 | 重试一次，可切换备用模型 |
+| 大模型结构错误 | 是 | 带校验错误重试一次 |
+| 推送临时失败 | 是 | 独立重试，不撤销活动 |
+| 数据库事务冲突 | 是 | 短暂等待后重试事务 |
+
+### 19.3 故障隔离
+
 - 某一个来源抓取失败，不能取消其他来源的任务。
-- 网络限流或服务器临时错误，采用逐渐延长等待时间的自动重试。
-- 地址不存在、权限不足等永久错误不无限重试。
-- 网页解析失败时保留原网页和失败原因，方便修复采集器。
-- 大模型输出不符合规定结构时，带着校验错误重试一次。
-- 推送失败单独重试，不撤销已经发布的活动。
+- 某一场活动总结失败，不能阻止其他候选活动继续处理。
+- 推送失败不能撤销已经发布的活动。
+- 地图服务失败时，活动仍可根据城市和质量规则判断，但通勤字段标记不可用。
+- 大模型完全不可用时，不发布缺少分析字段的新活动；已经存在的已发布活动仍可访问。
 - 每个任务步骤使用唯一操作编号，避免重试产生重复活动或重复消息。
+
+### 19.4 数据库配置应用失败
+
+- 候选连接测试失败时禁止保存为待应用版本。
+- 重启后健康检查必须同时验证 API、数据库查询和 Worker 心跳。
+- 健康检查超时后 Runtime Controller 自动恢复上一版配置。
+- 回滚成功和失败都写入审计日志和运行配置修订表。
+- 如果自动回滚也失败，Nginx继续提供静态错误页，服务器保留完整控制日志供命令行修复。
 
 ## 20. 常见英文术语说明
 
@@ -664,26 +1644,59 @@ PostgreSQL 数据库
 | Backoff | 退避重试，失败后逐渐延长等待时间 |
 | UUID | 通用唯一编号，用来稳定识别配置项和数据记录 |
 | UTC | 世界协调时间，UTC+8表示比世界协调时间快8小时 |
+| OpenAPI | 接口说明标准，FastAPI自动生成，前端据此生成类型 |
+| ORM | 对象关系映射，把Python对象和数据库表对应起来 |
+| JSONB | PostgreSQL可检索的JSON字段类型 |
+| GIN Index | PostgreSQL倒排索引，适合数组和JSONB查询 |
+| CSRF | 跨站请求伪造，攻击者诱导浏览器提交非本人操作 |
+| Argon2id | 专门用于安全保存密码哈希的算法 |
+| AES-256-GCM | 带完整性校验的对称加密算法，用于加密密钥 |
+| Unix Socket | 同一台服务器上进程之间通信的本地套接字文件 |
+| Runtime Controller | 本机运行控制服务，负责安全应用服务器启动配置 |
+| SSL | 加密网络连接，数据库连接也可以启用 |
+| Connection Pool | 数据库连接池，复用已有连接，避免每次重新建立 |
+| Token | 大模型处理文本时使用的计量单位，不等同于汉字数量 |
+| HttpOnly Cookie | 浏览器脚本无法读取的Cookie，用于降低会话被窃取风险 |
+| Idempotency Key | 幂等键，确保重复请求不会重复创建任务或推送 |
 
 ## 21. 验收标准
 
 ### 21.1 运营配置
 
-- 原型五个栏目全部通过后端接口真实保存。
+- 第一版存在独立 `/ops/` 运营后台，并且必须登录才能访问。
+- 运营后台沿用当前原型UI，不替换成通用后台模板。
+- 原型五个栏目全部通过后端接口真实保存，不增加第六个左侧导航。
+- 搜寻范围保留检索区域、目标数量、目标人群、公开来源和固定核验条件。
+- 时间与地点保留频率、运行时间、覆盖天数、交通出发点和城市收录门槛。
+- 主题偏好保留优先主题、固定技术要求、降权规则、活动类型、两级排序和输出取舍。
+- 展示字段保留4个固定字段、11个可选字段、摘要详细度、推送样式、时间格式、时区和隐藏未知值。
+- 推送与自动化保留推送通道、自动化状态、运行预检和重新生成能力。
 - 目标人群、来源、城市、主题、活动类型和通道支持新增、编辑、停用和删除。
 - 发布配置后生成不可修改的新版本。
 - 运行中的任务不受新发布配置影响。
 - 输入错误时在当前卡片内提示，不打开抽屉或弹窗。
 - 可以配置、测试、停用、清除和删除多个飞书或 Server酱通道。
+- 同一视觉体系下增加大模型服务、网页抓取参数和数据库连接区块。
+- 大模型密钥和数据库密码保存后不能回显。
+- 数据库连接支持测试、保存待应用、应用、健康检查和失败回滚。
 
-### 21.2 搜索与处理
+### 21.2 UI不变验收
+
+- 左侧栏目名称、顺序、数量和主要点击区域与原型一致。
+- 顶部品牌、页面切换、预览和发布操作位置与原型一致。
+- 配置卡片正常状态和行内编辑状态与原型交互一致。
+- 新技术字段只复用已有控件和样式，不创建抽屉、传统表格或全屏表单。
+- 桌面端使用相同内容宽度和对齐基线；移动端按已有响应式规则收缩。
+- 使用桌面和移动端截图进行视觉回归对比，确认不是借实现之名重新设计页面。
+
+### 21.3 搜索与处理
 
 - 固定来源和智能探索都读取同一份任务配置快照。
 - 修改城市、主题、来源和覆盖天数后，下一次任务自动生效，不需要修改代码。
 - 多来源发现同一活动时只发布一条活动，同时保留所有有效证据。
 - 固定事实不能只来自大模型生成文本。
 
-### 21.3 活动页
+### 21.4 活动页
 
 - 日历从周一开始，并在活动中标明城市。
 - 日历和下方详情列表宽度一致。
@@ -692,9 +1705,17 @@ PostgreSQL 数据库
 - 缺少图片或可选字段时不留下空白区域。
 - 桌面端和移动端没有内容裁切、重叠和文字溢出。
 
-### 21.4 稳定性与安全
+### 21.5 技术配置与运行
+
+- 普通网页并发、浏览器并发、超时和重试参数由后台真实控制 Worker。
+- 每次大模型调用可以追踪到模型配置、提示词版本、耗时、Token和费用。
+- 技术参数修改具有修订号，任务记录实际使用的参数版本。
+- Runtime Controller 不监听公网端口，数据库配置文件权限正确。
+- 数据库配置应用失败时自动恢复上一版可用配置。
+- API、Worker和Scheduler重启后可以恢复未完成任务，不丢失状态。
+
+### 21.6 稳定性与安全
 
 - 重试失败步骤不会重复创建活动或重复发送消息。
 - 单个来源或推送通道失败不影响其他成功结果。
 - 密钥不会出现在接口响应、日志、网页源码和任务配置快照中。
-
