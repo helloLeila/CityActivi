@@ -7,6 +7,7 @@
 当前原型是产品基线，以下内容保持不变：
 
 - 活动页仍然由“日历概览 + 下方活动详情”组成。
+- 日历概览上方增加“未来15天活动简述”，它与日历和下方详情使用同一批已发布活动数据。
 - 配置页仍然保留现有五个栏目和主要操作位置。
 - 配置项仍然在当前卡片内部展开编辑，不改成右侧抽屉或居中弹窗。
 - 现有主要文案、信息结构和操作流程不删除。
@@ -35,6 +36,7 @@
 活动页只展示已经完成抓取、合并、总结和核验的活动结果，包含：
 
 - 从周一开始排列的活动日历。
+- 日历上方的未来15天活动简述，按含金量和开始时间列出重点活动。
 - 根据配置动态生成的15天、30天或60天范围切换。
 - 根据已配置城市、主题和活动类型生成的筛选条件。
 - 日历下方的信息型活动详情列表。
@@ -742,10 +744,12 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 | 为什么值得去的长度 | 摘要详细度 |
 | 高含金量标记 | 含金量分数和可信度 |
 | 通勤时间 | 出发点、地图计算结果和展示开关 |
+| 日历上方的未来15天活动简述 | `output.calendar_brief_days`、`output.calendar_brief_limit` 和活动版本 `calendar_summary` |
+| 日历右侧活动分类标签 | 已启用 `event_types` 和活动版本 `category_labels` |
 
 如果配置覆盖60天，首页提供15天、30天和60天三个范围。首页不能选择超过后台实际抓取范围的日期。
 
-日历默认紧凑展示，展开和收起只改变页面显示，不重新抓取数据。
+日历默认紧凑展示，展开和收起只改变页面显示，不重新抓取数据。日历上方的活动简述默认取未来15天；如果运营配置覆盖范围为30天或60天，用户切换日历范围后，简述接口可以按当前范围重新返回，但默认首屏仍为15天。
 
 #### 配置合并规则
 
@@ -784,6 +788,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
   → 去重和合并
   → 大模型总结
   → 证据核验
+  → 通勤时间计算
   → 含金量评分与排序
   → 发布活动页
   → 推送通知
@@ -799,6 +804,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 | 去重合并 | 判断不同页面是否是同一活动 | 字段冲突进入核验 |
 | 大模型总结 | 生成价值、收获和准备内容 | 输出格式错误时重试一次 |
 | 证据核验 | 检查总结是否有原文支持 | 不合格内容拒绝发布 |
+| 通勤计算 | 根据出发点、活动坐标和出行方式调用地图路线接口 | 标记不可用，不伪造时间 |
 | 评分排序 | 根据正式配置计算分数 | 使用确定性计算，不让模型随意给分 |
 | 发布活动 | 写入正式活动版本 | 使用数据库事务避免发布一半 |
 | 推送通知 | 向各个启用通道发送 | 推送失败不撤销已发布活动 |
@@ -912,18 +918,36 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 大模型接收清洗后的网页证据，并按照固定结构返回：
 
 - 活动摘要。
+- 日历上方使用的未来15天活动简述。
 - 为什么值得参加。
 - 可以获得什么。
 - 需要提前准备什么。
 - 技术主题标签。
 - 活动类型判断。
+- 活动分类标签及主分类标记。
 - 每一项判断引用了哪些证据。
 
 标题、时间、地点和主办方不能从大模型生成结果中取值。
 
 活动详情中的事实性陈述，至少80%必须能够关联到保存的网页证据。大模型可以在“为什么值得去”等分析区域进行归纳，但不能把推测写成原文事实。
 
-### 阶段 5：含金量评分与排序
+### 阶段 5：通勤时间计算与可达性判断
+
+通勤计算是发布前的固定处理步骤，不是前端打开活动卡片后临时计算。它使用任务快照中的出发点和城市配置，对每一场已经完成去重、合并和事实核验的活动执行一次路线计算。
+
+执行顺序：
+
+1. 检查活动是否有可解析的场地坐标；线上活动记录 `commute_status=unavailable`，不调用路线接口。
+2. 读取任务快照中的出发点名称、经纬度、出行方式和地图服务。
+3. 将活动坐标、出发点坐标、出行方式和活动版本编号写入待计算记录，状态设为 `calculating`。
+4. 调用已配置的高德地图或 Google Maps 路线接口，记录请求时间、服务商、返回状态和脱敏响应摘要。
+5. 成功时保存预计分钟数、原始秒数、距离、出行方式、路线地址、出发点坐标快照和计算时间，状态改为 `succeeded`。
+6. 因配额、网络、坐标或服务错误失败时保存错误代码，状态改为 `failed` 或 `unavailable`，不能用固定偏移量猜测分钟数。
+7. 按城市配置的 `max_commute_minutes` 和 `include_threshold` 判断活动是否满足收录门槛；缺少通勤结果时按明确的城市规则处理，不静默放宽门槛。
+
+通勤结果必须随活动版本保存，不能只保存在缓存中。出发点或地图服务配置发生变化后，下一次任务重新计算；历史活动版本继续保留当时的计算结果，保证页面和通知可追溯。
+
+### 阶段 6：含金量评分与排序
 
 默认满分100分：
 
@@ -946,7 +970,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 
 活动最终是否收录，还要继续应用对应城市的收录门槛和通勤规则。
 
-### 阶段 6：异常处理、重试与恢复
+### 阶段 7：异常处理、重试与恢复
 
 异常处理属于一次活动的完整生命周期，不单独作为平级产品模块。每个阶段都要保存状态、错误代码、重试次数和可恢复位置。
 
@@ -1078,7 +1102,29 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 
 ### 6.6 完整配置 JSON 字段
 
-`config_versions.config_json` 必须包含原型的全部字段，不允许丢失：
+`config_versions.config_json` 必须保存一份完整配置，不能只保存本次修改的字段，也不能使用空对象或空数组代替已经定义的配置项。前端可以用 `PATCH` 提交局部修改，但后端合并后写入数据库的 `config_json` 必须包含下面所有根字段和数组对象字段。
+
+| 根字段 | 必须包含的子字段 | 数据用途 |
+| --- | --- | --- |
+| `region` | 区域名称 | 页面标题和城市预设识别 |
+| `target_count` | 目标数量 | 正式活动最多发布数量 |
+| `hide_expired` | 是否隐藏过期活动 | 首页结果过滤 |
+| `schedule` | `frequency`、`time`、`coverage_days`、`timezone` | 定时运行和搜索日期范围 |
+| `origin` | 名称、地址、经纬度、出行方式、地图服务、地图地址 | 通勤时间计算 |
+| `cities` | `id`、城市编号、名称、收录门槛、最大通勤时长、搜索优先级、启用状态、排序 | 城市检索和通勤筛选 |
+| `audiences` | `id`、名称、关键词、优先级、启用状态、排序 | 目标人群匹配 |
+| `sources` | `id`、名称、来源类型、采集方式、入口地址、覆盖城市、搜索优先级、启用状态、排序 | 固定来源抓取 |
+| `discovery` | 启用状态、最大线索数、优先网站、禁止网站、必须找到官方原文 | 智能探索边界 |
+| `topics` | `id`、名称、关键词、优先级、启用状态、排序 | 搜索、评分和筛选标签 |
+| `weak_content_rules` | `id`、名称、关键词、扣分分值、启用状态、排序 | 低质量活动降权 |
+| `event_types` | `id`、编码、名称、定义、启用状态、排序 | 活动分类标签和筛选 |
+| `sort` | 第一排序、第二排序 | 活动列表稳定排序 |
+| `preferences` | 中文标题偏好、隐藏未知值 | 展示偏好 |
+| `display_fields` | 原型中的全部字段开关 | 详情页字段显示 |
+| `output` | 摘要详细度、日历简述范围、推送样式、时间格式、时区模式、日历城市/分类/通勤开关 | 首页和推送输出 |
+| `channel_routes` | `id`、通道编号、名称、通道类型、推送范围、启用状态、排序 | 推送路由 |
+
+以下是第一版可以直接作为数据库种子、Pydantic默认值和前端初始状态的完整配置实例：
 
 ```json
 {
@@ -1094,19 +1140,207 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
   "origin": {
     "name": "深大地铁站",
     "address": "深圳市南山区深大地铁站",
-    "latitude": 0,
-    "longitude": 0,
+    "latitude": 22.5333000,
+    "longitude": 113.9364000,
     "travel_mode": "transit",
     "map_provider": "amap",
-    "map_url": ""
+    "map_url": "https://uri.amap.com/marker?position=113.9364,22.5333&name=深大地铁站"
   },
-  "cities": [],
-  "audiences": [],
-  "sources": [],
-  "discovery": {},
-  "topics": [],
-  "weak_content_rules": [],
-  "event_types": [],
+  "cities": [
+    {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "city_code": "shenzhen",
+      "name": "深圳",
+      "country_code": "CN",
+      "include_threshold": "medium",
+      "max_commute_minutes": 90,
+      "search_priority": "high",
+      "is_enabled": true,
+      "sort_order": 1
+    },
+    {
+      "id": "22222222-2222-4222-8222-222222222222",
+      "city_code": "guangzhou",
+      "name": "广州",
+      "country_code": "CN",
+      "include_threshold": "medium",
+      "max_commute_minutes": 120,
+      "search_priority": "high",
+      "is_enabled": true,
+      "sort_order": 2
+    },
+    {
+      "id": "33333333-3333-4333-8333-333333333333",
+      "city_code": "hong_kong",
+      "name": "香港",
+      "country_code": "HK",
+      "include_threshold": "high",
+      "max_commute_minutes": 150,
+      "search_priority": "medium",
+      "is_enabled": true,
+      "sort_order": 3
+    },
+    {
+      "id": "44444444-4444-4444-8444-444444444444",
+      "city_code": "zhuhai",
+      "name": "珠海",
+      "country_code": "CN",
+      "include_threshold": "high",
+      "max_commute_minutes": 150,
+      "search_priority": "medium",
+      "is_enabled": true,
+      "sort_order": 4
+    }
+  ],
+  "audiences": [
+    {
+      "id": "51111111-1111-4111-8111-111111111111",
+      "name": "AI工程师",
+      "keywords": ["Agent", "LLM", "RAG", "MCP", "模型部署"],
+      "priority": "high",
+      "is_enabled": true,
+      "sort_order": 1
+    },
+    {
+      "id": "52222222-2222-4222-8222-222222222222",
+      "name": "开源维护者",
+      "keywords": ["开源", "GitHub", "贡献者", "维护者", "社区"],
+      "priority": "high",
+      "is_enabled": true,
+      "sort_order": 2
+    },
+    {
+      "id": "53333333-3333-4333-8333-333333333333",
+      "name": "研究生与研究人员",
+      "keywords": ["论文", "实验室", "研究分享", "学术", "方法"],
+      "priority": "medium",
+      "is_enabled": true,
+      "sort_order": 3
+    }
+  ],
+  "sources": [
+    {
+      "id": "61111111-1111-4111-8111-111111111111",
+      "name": "Luma",
+      "source_type": "event_platform",
+      "collection_method": "direct_page",
+      "entry_url": "https://lu.ma/discover",
+      "covered_cities": ["shenzhen", "guangzhou", "hong_kong", "zhuhai"],
+      "search_priority": "high",
+      "is_enabled": true,
+      "sort_order": 1
+    },
+    {
+      "id": "62222222-2222-4222-8222-222222222222",
+      "name": "Meetup",
+      "source_type": "event_platform",
+      "collection_method": "site_search",
+      "entry_url": "https://www.meetup.com/find/",
+      "covered_cities": ["shenzhen", "guangzhou", "hong_kong"],
+      "search_priority": "medium",
+      "is_enabled": true,
+      "sort_order": 2
+    },
+    {
+      "id": "63333333-3333-4333-8333-333333333333",
+      "name": "高校与实验室活动页",
+      "source_type": "academic_institution",
+      "collection_method": "direct_page",
+      "entry_url": "https://www.szu.edu.cn/",
+      "covered_cities": ["shenzhen", "guangzhou"],
+      "search_priority": "medium",
+      "is_enabled": true,
+      "sort_order": 3
+    },
+    {
+      "id": "64444444-4444-4444-8444-444444444444",
+      "name": "开源社区官方活动页",
+      "source_type": "community_project",
+      "collection_method": "official_only_discovery",
+      "entry_url": "https://github.com/explore",
+      "covered_cities": ["shenzhen", "guangzhou", "hong_kong", "zhuhai"],
+      "search_priority": "medium",
+      "is_enabled": true,
+      "sort_order": 4
+    }
+  ],
+  "discovery": {
+    "is_enabled": true,
+    "max_leads_per_run": 30,
+    "preferred_domains": ["lu.ma", "meetup.com", "github.com", "szu.edu.cn"],
+    "blocked_domains": ["example-spam.invalid"],
+    "require_official_source": true
+  },
+  "topics": [
+    {
+      "id": "71111111-1111-4111-8111-111111111111",
+      "name": "Agent与智能体工程",
+      "keywords": ["Agent", "智能体", "工具调用", "MCP", "工作流"],
+      "priority": "high",
+      "is_enabled": true,
+      "sort_order": 1
+    },
+    {
+      "id": "72222222-2222-4222-8222-222222222222",
+      "name": "大模型应用与RAG",
+      "keywords": ["LLM", "RAG", "向量数据库", "Prompt", "评测"],
+      "priority": "high",
+      "is_enabled": true,
+      "sort_order": 2
+    },
+    {
+      "id": "73333333-3333-4333-8333-333333333333",
+      "name": "开源工程与开发者工具",
+      "keywords": ["开源", "DevTools", "GitHub", "SDK", "基础设施"],
+      "priority": "medium",
+      "is_enabled": true,
+      "sort_order": 3
+    }
+  ],
+  "weak_content_rules": [
+    {
+      "id": "81111111-1111-4111-8111-111111111111",
+      "name": "纯招聘活动",
+      "keywords": ["招聘", "岗位介绍", "面试", "人才招募"],
+      "penalty_points": 25,
+      "is_enabled": true,
+      "sort_order": 1
+    },
+    {
+      "id": "82222222-2222-4222-8222-222222222222",
+      "name": "缺少技术议程的宣传活动",
+      "keywords": ["品牌发布", "产品宣传", "商务交流", "闭门交流"],
+      "penalty_points": 20,
+      "is_enabled": true,
+      "sort_order": 2
+    }
+  ],
+  "event_types": [
+    {
+      "id": "91111111-1111-4111-8111-111111111111",
+      "code": "industry",
+      "name": "业界",
+      "description": "公司、工程团队和产业实践活动",
+      "is_enabled": true,
+      "sort_order": 1
+    },
+    {
+      "id": "92222222-2222-4222-8222-222222222222",
+      "code": "academic",
+      "name": "学术",
+      "description": "论文、实验室和研究方法分享活动",
+      "is_enabled": true,
+      "sort_order": 2
+    },
+    {
+      "id": "93333333-3333-4333-8333-333333333333",
+      "code": "open_source",
+      "name": "开源",
+      "description": "开源项目、社区和维护者活动",
+      "is_enabled": true,
+      "sort_order": 3
+    }
+  ],
   "sort": {
     "primary": "start_time",
     "secondary": "relevance"
@@ -1130,15 +1364,46 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
   },
   "output": {
     "summary_length": "full",
+    "calendar_brief_days": 15,
+    "calendar_brief_limit": 12,
+    "calendar_show_city": true,
+    "calendar_show_category_labels": true,
+    "calendar_show_commute": true,
     "push_style": "key_content",
     "time_format": "24h",
     "timezone_mode": "assistant"
   },
-  "channel_routes": []
+  "channel_routes": [
+    {
+      "id": "a1111111-1111-4111-8111-111111111111",
+      "channel_id": "b1111111-1111-4111-8111-111111111111",
+      "channel_name": "技术活动飞书群",
+      "channel_type": "feishu",
+      "delivery_scope": "high_value",
+      "is_enabled": true,
+      "sort_order": 1
+    },
+    {
+      "id": "a2222222-2222-4222-8222-222222222222",
+      "channel_id": "b2222222-2222-4222-8222-222222222222",
+      "channel_name": "个人Server酱",
+      "channel_type": "serverchan",
+      "delivery_scope": "all",
+      "is_enabled": true,
+      "sort_order": 2
+    }
+  ]
 }
 ```
 
-其中 `cities`、`audiences`、`sources`、`topics`、`weak_content_rules`、`event_types` 和 `channel_routes` 中的每一项都必须有稳定 UUID、名称、启用状态和排序序号。
+字段规则：
+
+- 上例中的 UUID 是初始化种子编号示例；新建配置项由后端生成真正的 UUID，不能由数组位置充当身份。
+- `blocked_domains` 中的 `example-spam.invalid` 只是用于说明字段结构的不可解析示例，生产初始化时应删除该条目，不能把它当成真实来源规则。
+- `channel_routes` 只保存通道编号和路由规则；飞书 Webhook、飞书签名密钥、Server酱 SendKey等密钥必须保存在 `secret_values`，不能写入 `config_json`。
+- `origin.latitude`、`origin.longitude`必须来自地图选点结果；如果用户更换出发点，不能继续使用旧坐标。
+- 允许为空的字段必须在 Pydantic 模型中明确声明为可空，例如活动结束时间、封面地址、报名人数和费用；配置章节中的必填字段不能用空字符串代替。
+- 后端启动时校验根字段集合、数组对象字段集合和 `schema_version`。缺少字段时先用版本化默认值补齐并生成迁移记录，禁止静默丢字段。
 
 ### 6.7 加密密钥表 `secret_values`
 
@@ -1323,11 +1588,14 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 | `latitude` | numeric(10,7) | 纬度 |
 | `longitude` | numeric(10,7) | 经度 |
 | `organizer_name` | text | 主办方显示名称 |
+| `community_name` | text | 所属社区或项目，可空 |
 | `normalized_organizer` | text | 去重用主办方名称 |
 | `canonical_url` | text | 标准原文地址 |
 | `registration_url` | text | 报名地址 |
 | `description_text` | text | 合并前事实描述 |
 | `agenda_json` | jsonb | 议程结构 |
+| `category_labels` | jsonb | 活动分类标签候选及其置信度 |
+| `topic_labels` | text[] | 技术主题标签候选 |
 | `source_keys` | jsonb | 各来源内部活动编号 |
 | `duplicate_group_key` | varchar(160) | 疑似重复分组 |
 | `fact_confidence` | numeric(4,3) | 事实可信度 |
@@ -1366,9 +1634,11 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 | `latitude`、`longitude` | numeric | 经纬度 |
 | `organizer_name` | text | 主办方 |
 | `community_name` | text | 所属社区，可空 |
-| `event_type` | varchar(64) | 业界、学术、开源等 |
+| `event_type` | varchar(64) | 兼容字段，保存主分类编码 |
+| `category_labels` | jsonb | 活动分类标签数组，供首页标签、筛选和排序使用 |
 | `topic_labels` | text[] | 技术主题标签 |
 | `summary` | text | 活动摘要 |
+| `calendar_summary` | text | 日历上方未来15天简述使用的短摘要 |
 | `why_worth` | jsonb | 为什么值得去的结构化内容 |
 | `takeaways` | jsonb | 收获列表 |
 | `prerequisites` | jsonb | 提前准备列表 |
@@ -1376,9 +1646,18 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 | `registration_url` | text | 报名入口 |
 | `cost_text` | text | 官方费用说明，可空 |
 | `cover_url` | text | 官方有效封面，可空 |
+| `commute_status` | varchar(24) | pending、calculating、succeeded、unavailable、failed |
+| `commute_origin_name` | text | 本次计算使用的出发点名称 |
+| `commute_origin_latitude`、`commute_origin_longitude` | numeric(10,7) | 出发点坐标快照 |
+| `commute_origin_config_version_id` | uuid | 计算时使用的配置版本 |
+| `commute_provider` | varchar(32) | amap、google_maps等路线服务 |
 | `commute_minutes` | integer | 通勤分钟数，可空 |
+| `commute_duration_seconds` | integer | 路线服务返回的原始秒数，可空 |
 | `commute_distance_meters` | integer | 通勤距离，可空 |
 | `commute_mode` | varchar(24) | 出行方式，可空 |
+| `commute_route_url` | text | 可选的路线查看地址 |
+| `commute_calculated_at` | timestamptz | 最近一次成功或失败计算时间 |
+| `commute_error_code` | varchar(80) | 计算失败代码，可空 |
 | `quality_score` | numeric(5,2) | 含金量总分 |
 | `quality_level` | varchar(16) | high、medium、low |
 | `fact_confidence` | numeric(4,3) | 事实可信度 |
@@ -1387,6 +1666,33 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 
 唯一约束：`event_id, version_number`。主要索引：`start_at`、`city_code, start_at`、`quality_level, start_at`、`topic_labels` GIN 索引。
 
+`category_labels` 的保存结构固定为数组，每个标签必须能回指配置中的 `event_types.id` 或对应的原文证据：
+
+```json
+[
+  {
+    "code": "industry",
+    "name": "业界",
+    "kind": "event_type",
+    "is_primary": true,
+    "confidence": 0.94,
+    "evidence_ids": ["e1111111-1111-4111-8111-111111111111"]
+  },
+  {
+    "code": "open_source",
+    "name": "开源",
+    "kind": "event_type",
+    "is_primary": false,
+    "confidence": 0.88,
+    "evidence_ids": ["e2222222-2222-4222-8222-222222222222"]
+  }
+]
+```
+
+约束：`code` 必须来自已启用的活动类型；`name` 是页面显示文本；`is_primary=true` 的标签最多一个；`confidence` 必须在0到1之间；没有原文证据支持的标签不能进入公开版本。`event_type` 只作为兼容和主分类查询字段，首页展示以 `category_labels` 为准。
+
+`calendar_summary` 不是 `summary` 的截断结果。它由大模型根据已经核验的标题、议程、主办方和地点生成，限制为1至3句、80至220个中文字符，用于日历上方“未来15天活动简述”区域；没有通过证据核验就不能写入公开活动版本。
+
 ### 6.18 活动证据表 `event_evidence`
 
 | 字段 | 类型 | 说明 |
@@ -1394,7 +1700,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 | `id` | uuid | 证据编号 |
 | `event_version_id` | uuid | 关联活动版本 |
 | `raw_document_id` | uuid | 关联原始网页 |
-| `field_name` | varchar(80) | title、start_at、why_worth 等 |
+| `field_name` | varchar(80) | title、start_at、category_labels、calendar_summary、why_worth 等 |
 | `claim_text` | text | 页面中使用的事实或结论 |
 | `source_excerpt` | text | 支撑该字段的原文片段 |
 | `source_locator` | jsonb | CSS路径、JSON-LD路径或段落位置 |
@@ -1553,12 +1859,168 @@ events
 
 | 请求方式和地址 | 中文用途 |
 | --- | --- |
-| `GET /api/public/events` | 按日期、城市、主题、类型和含金量查询活动 |
+| `GET /api/public/events` | 按日期、城市、主题、分类标签和含金量查询活动详情 |
 | `GET /api/public/events/{eventId}` | 获取活动详情和标准原文链接 |
 | `GET /api/public/filters` | 获取当前活动页可用的动态筛选项 |
-| `GET /api/public/calendar` | 获取指定日期范围内的日历摘要 |
+| `GET /api/public/calendar` | 获取指定日期范围内的日历格和日历活动摘要 |
+| `GET /api/public/calendar/brief` | 获取放在日历上方的未来15天活动简述 |
 
-公开接口只返回已经发布的活动版本，不返回原始网页全文、运营配置、密钥状态和内部评分过程。
+公开接口只返回已经发布的活动版本，不返回原始网页全文、运营配置、密钥状态、内部评分明细和模型原始输出。所有接口的活动对象都必须包含主办方、地点、城市、分类标签和通勤状态；详情接口再按展示配置补充收获、提前准备和其他可选字段。
+
+#### 7.1.1 日历上方的未来15天活动简述
+
+首页加载时先调用 `GET /api/public/calendar/brief?days=15`，返回结果渲染到日历组件上方。它不是活动详情列表的替代品，而是帮助用户在不逐张打开活动的情况下快速了解未来两周值得关注的活动。
+
+请求参数：
+
+| 参数 | 是否必填 | 规则 |
+| --- | --- | --- |
+| `days` | 否 | 只能是15、30或60；默认15；不能超过后台已发布的 `schedule.coverage_days` |
+| `city` | 否 | 城市编号，可重复传入 |
+| `category` | 否 | 活动分类编码，例如 `industry`、`academic`、`open_source` |
+| `topic` | 否 | 技术主题编码或关键词 |
+| `limit` | 否 | 默认取 `output.calendar_brief_limit`，不能超过 `target_count` |
+
+返回结构：
+
+```json
+{
+  "title": "未来15天活动简述",
+  "range": {
+    "days": 15,
+    "start_date": "2026-09-04",
+    "end_date": "2026-09-18",
+    "timezone": "Asia/Shanghai"
+  },
+  "total_count": 8,
+  "items": [
+    {
+      "event_id": "e1111111-1111-4111-8111-111111111111",
+      "date": "2026-09-10",
+      "date_label": "9月10日 周四",
+      "title": "Agent工程实践与工具调用分享",
+      "city_name": "深圳",
+      "venue_name": "深圳大学科技楼",
+      "organizer_name": "深圳开发者社区",
+      "community_name": "Agent Builders Community",
+      "category_labels": [
+        {
+          "code": "industry",
+          "name": "业界",
+          "is_primary": true
+        },
+        {
+          "code": "open_source",
+          "name": "开源",
+          "is_primary": false
+        }
+      ],
+      "topic_labels": ["Agent与智能体工程", "MCP"],
+      "quality_level": "high",
+      "calendar_summary": "围绕Agent工具调用、MCP接入和工程落地展开，适合希望把智能体从演示推进到可运行系统的开发者。",
+      "commute": {
+        "status": "succeeded",
+        "minutes": 42,
+        "distance_meters": 18500,
+        "mode": "transit",
+        "provider": "amap"
+      },
+      "canonical_url": "https://example.com/events/agent-practice",
+      "registration_url": "https://example.com/events/agent-practice/register"
+    }
+  ]
+}
+```
+
+实现规则：
+
+- `items` 按含金量降序、开始时间升序排列；相同分数再按活动编号稳定排序。
+- `calendar_summary`必须来自已核验的活动版本，不能在公开接口请求时临时调用大模型。
+- 简述中允许出现分析性内容，但主办方、城市、地点、日期、分类和主题必须使用数据库事实字段。
+- 没有通勤结果时仍返回 `commute.status`，前端显示“暂未计算”或“路线不可用”，不返回伪造的分钟数。
+- 没有图片不影响该接口，接口不返回空的图片占位字段。
+
+如果后台配置的 `schedule.coverage_days` 是15，接口只允许请求15天；如果配置为30，允许请求15天或30天；如果配置为60，允许请求15天、30天或60天。请求超过已发布覆盖范围时返回 `CALENDAR_RANGE_NOT_AVAILABLE`，不偷偷返回部分结果。
+
+#### 7.1.2 日历格接口
+
+`GET /api/public/calendar?days=15`服务日历本体，返回从周一开始的日期数组。每个日期格只返回日历所需的紧凑信息，不返回完整详情正文：
+
+```json
+{
+  "week_starts_on": "monday",
+  "range_days": 15,
+  "timezone": "Asia/Shanghai",
+  "days": [
+    {
+      "date": "2026-09-10",
+      "weekday": "周四",
+      "events": [
+        {
+          "event_id": "e1111111-1111-4111-8111-111111111111",
+          "title": "Agent工程实践与工具调用分享",
+          "city_name": "深圳",
+          "start_time": "19:00",
+          "category_labels": [
+            {"code": "industry", "name": "业界", "is_primary": true},
+            {"code": "open_source", "name": "开源", "is_primary": false}
+          ],
+          "quality_level": "high",
+          "commute_minutes": 42,
+          "detail_url": "/events/e1111111-1111-4111-8111-111111111111"
+        }
+      ]
+    }
+  ]
+}
+```
+
+日历组件上方显示 `calendar/brief` 的简述；日历格显示 `calendar` 的日期、城市、标题、分类标签和通勤分钟数；点击日历活动直接跳转活动详情页，不增加多余的中间按钮。下方详情列表继续调用 `GET /api/public/events`，因此“日历概览 + 活动简述 + 下方活动详情”使用同一批已发布活动数据，不会出现三个区域内容不一致。
+
+#### 7.1.3 活动详情返回字段
+
+`GET /api/public/events/{eventId}`至少返回：
+
+| 字段 | 返回内容 |
+| --- | --- |
+| `event_id`、`title` | 稳定活动编号和标题 |
+| `start_at`、`end_at`、`timezone` | 活动时间 |
+| `city_name`、`venue_name`、`venue_address` | 城市和具体地点 |
+| `organizer_name`、`community_name` | 主办方和所属社区 |
+| `category_labels`、`topic_labels` | 分类标签和技术主题标签 |
+| `summary`、`calendar_summary` | 详情摘要和日历简述 |
+| `why_worth` | 为什么值得去 |
+| `takeaways` | 参加后可以获得什么 |
+| `prerequisites` | 提前准备目录 |
+| `commute` | 通勤状态、时长、距离、方式和地图服务 |
+| `canonical_url`、`registration_url` | 原文和报名链接 |
+
+分类标签是右侧标签的唯一数据来源，不再从标题文字或前端硬编码推断。通勤对象的 `status`、`minutes`、`distance_meters`、`mode`、`provider` 和 `calculated_at` 与 `event_versions` 中的同名字段保持一致。
+
+#### 7.1.4 活动页筛选接口返回值
+
+`GET /api/public/filters` 返回活动页的动态筛选项，分类标签直接来自已发布活动版本和已启用的运营配置：
+
+```json
+{
+  "date_ranges": [15],
+  "cities": [
+    {"code": "shenzhen", "name": "深圳", "event_count": 6}
+  ],
+  "categories": [
+    {"code": "industry", "name": "业界", "event_count": 5},
+    {"code": "academic", "name": "学术", "event_count": 2},
+    {"code": "open_source", "name": "开源", "event_count": 4}
+  ],
+  "topics": [
+    {"name": "Agent与智能体工程", "event_count": 5},
+    {"name": "大模型应用与RAG", "event_count": 4}
+  ],
+  "quality_levels": ["high", "medium"]
+}
+```
+
+`date_ranges` 由当前配置的 `coverage_days` 截断；`categories` 的名称、编码和数量不能由前端写死。分类筛选条件传入 `calendar/brief`、`calendar` 和 `events` 时使用同一套编码，避免日历和下方详情筛选出不同结果。
 
 ### 7.2 运营登录接口
 
@@ -1744,12 +2206,17 @@ events
 - 修改城市、主题、来源和覆盖天数后，下一次任务自动生效，不需要修改代码。
 - 多来源发现同一活动时只发布一条活动，同时保留所有有效证据。
 - 固定事实不能只来自大模型生成文本。
+- 活动分类标签必须来自已启用的 `event_types`，并且至少有一条网页证据；前端不允许根据标题自行猜分类。
+- 活动发布前必须完成通勤计算或明确记录 `unavailable` / `failed` 状态，不能用固定值填充通勤分钟数。
 
 ### 9.4 活动页
 
 - 日历从周一开始，并在活动中标明城市。
+- 日历上方显示未来15天活动简述，简述与下方详情使用同一活动版本。
 - 日历和下方详情列表宽度一致。
 - 根据配置提供15天、30天和60天范围，但不超过实际搜索范围。
+- 日历活动对象包含分类标签、标签主次关系和通勤状态；分类标签可以作为筛选条件。
+- 通勤计算成功时展示分钟数、出行方式和距离；计算失败时展示明确状态，不显示虚构时间。
 - 高含金量活动具有明确视觉重点，但不增加大量边框和卡片。
 - 缺少图片或可选字段时不留下空白区域。
 - 桌面端和移动端没有内容裁切、重叠和文字溢出。
