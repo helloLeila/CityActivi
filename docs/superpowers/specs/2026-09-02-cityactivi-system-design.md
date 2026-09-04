@@ -274,6 +274,586 @@ Nginx 是外部唯一入口：
 
 Docker Compose 运行 PostgreSQL、API、Worker、Scheduler 和 Nginx。前端在构建阶段生成静态文件，不需要常驻 Node.js 进程。对于配置较低的服务器，Worker 默认单进程，网页抓取并发可在运营后台调整，Playwright 浏览器数量设置独立上限。
 
+### 3.11 Python 后端具体落地方式
+
+本节把前面的 Python 技术选型落实为可以直接创建文件和编写代码的结构。Python 在本项目中不是“把所有事情写在一个脚本里”，而是分为接口服务、定时调度、后台执行、网页采集、活动处理、大模型分析、通勤计算和推送适配几个边界。
+
+#### 3.11.1 三个常驻进程各自负责什么
+
+| 进程 | 启动入口 | 只负责什么 | 不负责什么 |
+| --- | --- | --- | --- |
+| API进程 | `services/api/app/main.py` | 登录、配置、公开活动查询、任务创建和状态查询 | 不在HTTP请求中执行网页抓取或大模型长任务 |
+| Scheduler进程 | `services/scheduler/app/main.py` | 每分钟检查到期计划，并创建唯一的 `job_runs` | 不抓网页、不调用模型、不发送消息 |
+| Worker进程 | `services/worker/app/main.py` | 领取任务，执行抓取、提取、合并、总结、通勤、评分、发布和推送 | 不接收公网请求，不修改运营配置 |
+
+API收到“立即运行”请求时，只在数据库中创建等待任务并立即返回 `job_id`。真正的处理由 Worker 完成，前端通过任务接口查看进度。这样不会因为网页加载慢或模型响应慢而让浏览器请求超时。
+
+#### 3.11.2 Python目录和模块职责
+
+```text
+services/
+  api/
+    app/
+      main.py                         FastAPI应用入口
+      core/
+        settings.py                   环境变量和启动配置
+        errors.py                     统一错误代码
+        logging.py                    脱敏日志配置
+      db/
+        session.py                     SQLAlchemy异步连接和会话
+        models/                        数据库模型
+        migrations/                    Alembic迁移配置
+      api/
+        deps.py                        登录用户、数据库会话等依赖
+        routes/
+          public_events.py             活动页公开接口
+          ops_config.py                配置草稿和发布接口
+          ops_jobs.py                  任务和步骤接口
+          ops_channels.py              推送通道接口
+          ops_runtime.py               模型、抓取和数据库运行配置接口
+      schemas/                         Pydantic请求和响应模型
+      repositories/                    只负责数据库读写
+      services/                        配置、发布、查询和权限业务逻辑
+      security/                        密码、会话、密钥和审计
+  scheduler/
+    app/
+      main.py                          调度循环入口
+      scheduler_service.py             到期计划和幂等创建任务
+  worker/
+    app/
+      main.py                          Worker循环入口
+      runtime/
+        claim.py                        领取任务和租约续期
+        step_runner.py                  步骤状态、重试和心跳
+      pipeline/
+        run_activity_job.py             一次完整活动任务编排
+        models.py                       任务内部数据结构
+      sources/
+        base.py                         固定来源统一接口
+        luma.py                         Luma采集器
+        meetup.py                       Meetup采集器
+        academic.py                     高校或实验室页面采集器
+        discovery_agent.py              可选的智能探索补漏
+      extraction/
+        html_cleaner.py                 HTML正文清洗
+        event_parser.py                 标题、时间、地点等事实提取
+        normalizer.py                   时间、城市、主办方标准化
+      analysis/
+        prompts/                         Prompt模板和版本
+        llm_client.py                    大模型适配器
+        summary_service.py               摘要、分类和证据核验
+        scoring.py                       确定性评分
+      commute/
+        map_client.py                    高德或Google Maps适配器
+        route_service.py                 通勤计算和结果保存
+      publishing/
+        event_publisher.py               发布活动版本
+        calendar_query.py                日历和15天简述查询
+      notifications/
+        base.py                           推送通道接口
+        feishu.py                         飞书适配器
+        serverchan.py                     Server酱适配器
+```
+
+依赖方向固定为：
+
+```text
+路由 routes
+  → 应用服务 services
+    → 仓储 repositories / 外部客户端 clients
+      → SQLAlchemy会话或外部HTTP服务
+```
+
+路由文件不能直接写复杂 SQL；仓储不能调用大模型；大模型客户端不能直接修改活动表。违反这个边界，后面更换数据库、模型服务或来源网站时会产生连锁修改。
+
+#### 3.11.3 启动配置和环境变量
+
+服务器级配置使用环境变量或服务器外部文件，不能从浏览器直接传入 Python 进程。Pydantic Settings负责读取、类型转换和启动校验：
+
+```python
+# services/api/app/core/settings.py
+from functools import lru_cache
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    app_name: str = "CityActivi"
+    environment: str = "production"
+    database_url: str
+    session_cookie_name: str = "cityactivi_session"
+    runtime_socket_path: str = "/run/cityactivi/runtime.sock"
+    public_base_url: str = "https://cityactivi.example.com"
+    api_request_timeout_seconds: int = Field(default=30, ge=5, le=120)
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+```
+
+`database_url`和运行时密钥只在进程启动时读取，禁止放入 `config_versions.config_json`。运营后台修改数据库连接时，写入服务器外部的受保护配置，由 Runtime Controller应用，不通过普通业务表间接改变当前连接。
+
+#### 3.11.4 SQLAlchemy异步会话和事务
+
+```python
+# services/api/app/db/session.py
+from collections.abc import AsyncIterator
+
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+from app.core.settings import get_settings
+
+
+settings = get_settings()
+engine = create_async_engine(
+    settings.database_url,
+    pool_pre_ping=True,
+    pool_size=5,
+    max_overflow=5,
+    pool_recycle=1800,
+)
+session_factory = async_sessionmaker(
+    engine,
+    expire_on_commit=False,
+    class_=AsyncSession,
+)
+
+
+async def get_session() -> AsyncIterator[AsyncSession]:
+    async with session_factory() as session:
+        yield session
+```
+
+业务服务显式控制事务，不把一个包含外部网络调用的长流程放进事务：
+
+```python
+async def create_run(session: AsyncSession, profile_id, config_version_id, key):
+    async with session.begin():
+        run = JobRun(
+            profile_id=profile_id,
+            config_version_id=config_version_id,
+            idempotency_key=key,
+            status="queued",
+        )
+        session.add(run)
+    return run.id
+```
+
+这段代码只负责写入“任务已经创建”。网页、地图和模型调用在事务提交后执行；调用结束后再用短事务把结果写回。Java开发者可以把它理解为：Controller只创建任务，Service划分事务，Repository封装持久化，外部HTTP调用不占着数据库事务不放。
+
+#### 3.11.5 配置接口如何保证保存后仍是完整 JSON
+
+配置请求分为“局部修改”和“完整存储”两个概念。前端可以只提交一个卡片，但后端必须按版本号读取完整草稿、深层合并、校验全量结构，再写回完整 JSON：
+
+```python
+async def patch_config(
+    session: AsyncSession,
+    profile_id,
+    patch: ConfigPatch,
+    expected_version: int,
+) -> ConfigVersion:
+    async with session.begin():
+        draft = await config_repo.lock_draft(session, profile_id)
+        if draft.version_number != expected_version:
+            raise ConfigVersionConflict()
+
+        merged = merge_config(draft.config_json, patch.model_dump(exclude_unset=True))
+        complete = ConfigDocument.model_validate(merged)
+        draft.config_json = complete.model_dump(mode="json")
+        draft.schema_version = complete.schema_version
+        draft.checksum = sha256_json(draft.config_json)
+        return draft
+```
+
+`ConfigDocument`必须使用必填根字段和明确的子模型，不能使用 `dict[str, Any]` 代替全部校验：
+
+```python
+from datetime import time
+from typing import Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class ScheduleConfig(BaseModel):
+    frequency: Literal["daily", "weekdays", "weekly_monday"]
+    time: time
+    coverage_days: Literal[15, 30, 60]
+    timezone: str = Field(pattern=r"^[A-Za-z_]+/[A-Za-z_]+$")
+
+
+class CityConfig(BaseModel):
+    id: UUID
+    city_code: str = Field(min_length=2, max_length=32)
+    name: str = Field(min_length=1, max_length=80)
+    country_code: str = Field(min_length=2, max_length=2)
+    include_threshold: Literal["high", "medium", "all"]
+    max_commute_minutes: int = Field(ge=0, le=300)
+    search_priority: Literal["high", "medium", "low"]
+    is_enabled: bool
+    sort_order: int = Field(ge=1)
+
+
+class ConfigDocument(BaseModel):
+    schema_version: int = 1
+    region: str = Field(min_length=1, max_length=100)
+    target_count: int = Field(ge=1, le=100)
+    hide_expired: bool
+    schedule: ScheduleConfig
+    origin: OriginConfig
+    cities: list[CityConfig] = Field(min_length=1)
+    audiences: list[AudienceConfig] = Field(min_length=1)
+    sources: list[SourceConfig] = Field(min_length=1)
+    discovery: DiscoveryConfig
+    topics: list[TopicConfig] = Field(min_length=1)
+    weak_content_rules: list[WeakContentRuleConfig] = Field(min_length=1)
+    event_types: list[EventTypeConfig] = Field(min_length=1)
+    sort: SortConfig
+    preferences: PreferencesConfig
+    display_fields: DisplayFieldsConfig
+    output: OutputConfig
+    channel_routes: list[ChannelRouteConfig] = Field(min_length=1)
+
+    model_config = ConfigDict(extra="forbid")
+```
+
+实际代码中每个列表项都应继续定义对应的 Pydantic 模型。`extra="forbid"`防止前端拼错字段后被静默忽略；旧版本升级时用显式迁移函数补字段，而不是在接口层临时拼默认值。
+
+#### 3.11.6 Scheduler如何创建不重复的任务
+
+Scheduler每分钟读取启用的 `assistant_profiles` 和正式配置中的运行时间。到达时间后，在事务中使用唯一幂等键创建 `job_runs`：
+
+```python
+async def tick(session: AsyncSession, now: datetime) -> None:
+    due_profiles = await profile_repo.list_due(session, now)
+    for profile in due_profiles:
+        scheduled_key = f"{profile.id}:{now.date().isoformat()}:{profile.schedule_time}"
+        await run_service.create_if_absent(
+            session=session,
+            profile=profile,
+            idempotency_key=scheduled_key,
+        )
+```
+
+数据库必须对 `job_runs.idempotency_key` 建唯一约束。Scheduler重复运行、服务器重启或同一分钟执行两次时，第二次插入只得到“已存在”，不能生成第二个任务。Scheduler不读取草稿，只使用已经发布的配置。
+
+#### 3.11.7 Worker如何领取任务和恢复任务
+
+Worker使用短事务锁定一条等待任务，并写入租约。SQLAlchemy写法如下：
+
+```python
+async def claim_one(session: AsyncSession, worker_id: str, now: datetime):
+    async with session.begin():
+        stmt = (
+            select(JobRun)
+            .where(
+                JobRun.status == "queued",
+                or_(
+                    JobRun.lease_expires_at.is_(None),
+                    JobRun.lease_expires_at < now,
+                ),
+            )
+            .order_by(JobRun.created_at)
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        run = (await session.execute(stmt)).scalar_one_or_none()
+        if run is None:
+            return None
+        run.status = "running"
+        run.lease_owner = worker_id
+        run.lease_expires_at = now + timedelta(minutes=5)
+        run.heartbeat_at = now
+        return run
+```
+
+Worker每30秒续租一次；步骤结束、失败或任务完成时更新心跳。进程崩溃后租约过期，其他 Worker可以重新领取。重新领取不能从第一步盲目开始，而是读取 `job_steps`：已经成功的步骤跳过，失败步骤从允许重试的位置继续。
+
+#### 3.11.8 步骤执行器和重试策略
+
+所有任务步骤通过同一个执行器运行，避免每个模块自己实现一套错误处理：
+
+```python
+async def run_step(
+    session: AsyncSession,
+    run_id: UUID,
+    step_name: str,
+    handler: Callable[[], Awaitable[None]],
+    max_attempts: int,
+) -> None:
+    step = await step_repo.get_or_create(session, run_id, step_name)
+    if step.status == "succeeded":
+        return
+
+    for attempt in range(step.attempt_count + 1, max_attempts + 1):
+        await step_repo.mark_running(session, step, attempt)
+        try:
+            await handler()
+        except RetryableError as error:
+            await step_repo.mark_retrying(session, step, error)
+            if attempt == max_attempts:
+                raise
+            await asyncio.sleep(backoff_seconds(attempt))
+        except NonRetryableError as error:
+            await step_repo.mark_failed(session, step, error)
+            raise
+        else:
+            await step_repo.mark_succeeded(session, step)
+            return
+```
+
+网络超时、429、模型临时不可用属于可重试错误；字段缺失、网页结构变化、权限错误属于不可自动重试错误。每次重试使用同一个 `run_id` 和 `step_name`，推送步骤还必须使用 `batch_key` 防止消息重复。
+
+#### 3.11.9 固定来源抓取和智能探索如何组合
+
+固定来源是主路径，智能探索是补漏路径，二者产生的候选统一进入 `event_candidates`：
+
+```python
+class ActivitySource(Protocol):
+    source_id: UUID
+
+    async def discover(self, task: SearchTaskInput) -> list[DiscoveredLink]: ...
+
+    async def fetch(self, url: str) -> RawPage: ...
+
+    async def parse(self, page: RawPage) -> ExtractedEvent: ...
+```
+
+每个固定来源适配器只能处理自己的网站规则，不能修改全局配置。Worker按以下顺序执行：
+
+1. 读取任务快照中的 `sources` 和 `cities`。
+2. 调用已启用固定来源的 `discover`，保存每条 `search_tasks`。
+3. 对发现的链接先用 `httpx`抓取，只有页面依赖 JavaScript时才使用 Playwright。
+4. 固定来源不足 `max_leads_per_run` 或配置允许智能探索时，调用 `discovery_agent`补充线索。
+5. 智能探索只能返回候选网址和理由，不能直接返回可发布活动。
+6. 所有网址经过同一套抓取、事实提取、证据保存、去重和核验流程。
+
+智能探索不需要 LangChain、LangGraph或其他 Agent 框架。第一版只需要一个带工具白名单的 Python 服务：搜索工具、打开网页工具、提取链接工具和保存候选工具。工具调用次数、允许域名和最大线索数由配置控制。
+
+#### 3.11.10 网页事实提取的输入输出
+
+事实提取器只负责“网页上写了什么”，不负责判断“值不值得去”：
+
+```python
+class ExtractedEvent(BaseModel):
+    title: str
+    start_at: datetime
+    end_at: datetime | None = None
+    timezone: str
+    city_code: str
+    venue_name: str
+    venue_address: str | None = None
+    organizer_name: str
+    community_name: str | None = None
+    canonical_url: HttpUrl
+    registration_url: HttpUrl | None = None
+    description_text: str
+    agenda: list[AgendaItem]
+    field_evidence: list[FieldEvidence]
+```
+
+解析器必须同时返回字段证据，例如 `start_at` 对应网页中的日期文本和 DOM 路径。没有标题、开始时间、城市、主办方或标准原文链接的候选不能进入正式发布；结束时间、报名链接、费用和封面是可选字段，可以明确为空。
+
+#### 3.11.11 去重、合并和分类标签的 Python边界
+
+去重服务不接收模型自由文本作为最终事实，只接收标准化候选：
+
+```python
+class CandidateMatcher:
+    def build_identity_key(self, event: ExtractedEvent) -> str:
+        return stable_hash(
+            normalize_text(event.organizer_name),
+            event.city_code,
+            event.start_at.isoformat(),
+            normalize_text(event.venue_name),
+        )
+
+    def decide(self, left: ExtractedEvent, right: ExtractedEvent) -> MatchDecision:
+        if left.canonical_url == right.canonical_url:
+            return MatchDecision.same_event(score=1.0)
+        score = weighted_similarity(left, right)
+        if score >= 0.90:
+            return MatchDecision.same_event(score=score)
+        if score >= 0.70:
+            return MatchDecision.needs_review(score=score)
+        return MatchDecision.different(score=score)
+```
+
+合并服务选择字段时按来源可信顺序执行，冲突字段保留冲突证据；大模型不能替换标题、时间、地点和主办方。分类服务输出 `category_labels`：每个标签必须包含编码、中文名称、是否主分类、置信度和证据编号，并且编码必须存在于任务快照的 `event_types`中。分类标签不是前端根据标题猜出来的颜色或文字。
+
+#### 3.11.12 大模型调用的 Python适配层
+
+业务代码只依赖能力接口，不依赖具体厂商：
+
+```python
+class LlmClient(Protocol):
+    async def structured_completion(
+        self,
+        *,
+        purpose: str,
+        prompt_version: str,
+        input_text: str,
+        response_model: type[BaseModel],
+    ) -> BaseModel: ...
+```
+
+`summary_service.py`负责：
+
+1. 从 `raw_documents`和`event_evidence`组装清洗后的证据文本。
+2. 根据任务用途选择固定 Prompt版本。
+3. 调用模型适配器并要求结构化输出。
+4. 用 Pydantic校验字段类型、数组长度和证据编号。
+5. 检查 `calendar_summary`、`why_worth`、`takeaways`和`prerequisites`是否都有证据引用。
+6. 将输入哈希、模型、Prompt版本、Token、耗时、原始输出和校验结果写入 `llm_runs`。
+
+模型可以生成分析和归纳，不能生成事实字段。分类标签和摘要生成成功后仍要经过证据核验；校验失败只重试一次，并把校验错误传回模型，第二次仍失败就拒绝发布该候选。
+
+#### 3.11.13 通勤时间计算的 Python实现
+
+通勤计算由独立 `RouteClient`完成，发布活动前执行：
+
+```python
+class RouteClient(Protocol):
+    async def calculate(
+        self,
+        *,
+        origin: Coordinates,
+        destination: Coordinates,
+        mode: str,
+    ) -> RouteResult: ...
+
+
+class RouteResult(BaseModel):
+    provider: Literal["amap", "google_maps"]
+    mode: str
+    duration_seconds: int = Field(ge=0)
+    distance_meters: int = Field(ge=0)
+    route_url: HttpUrl | None = None
+```
+
+`route_service.py`的固定顺序：
+
+1. 读取活动地点坐标和任务快照中的出发点坐标。
+2. 没有坐标时写入 `commute_status=unavailable`，不猜测分钟数。
+3. 写入 `commute_status=calculating`后调用地图接口。
+4. 成功后把秒数、分钟数、距离、方式、服务商、路线地址和计算时间写入活动版本。
+5. 失败后写入 `failed`、错误码和脱敏错误，不阻塞其他活动。
+6. 使用城市配置的最大通勤时间参与收录判断和排序。
+
+通勤结果保存到 `event_versions`，不是只存在 Python内存或缓存中。这样活动详情、日历、15天简述和推送消息都能使用同一份计算结果。
+
+#### 3.11.14 活动发布、日历查询和15天简述
+
+活动发布服务只接收完成事实核验、分类、通勤和评分的候选。发布事务需要同时完成：
+
+```text
+创建或锁定 events 主记录
+  → 创建 event_versions 内容版本
+  → 写入 event_evidence 证据关系
+  → 更新 events.current_version_id
+  → 提交事务
+```
+
+提交后才允许推送。公开查询服务只查询 `events.current_version_id`指向的活动版本：
+
+- `calendar_query.py`按日期生成从周一开始的日期格，返回城市、标题、分类标签、质量等级和通勤分钟数。
+- `calendar_query.py`的 `get_brief(days=15)`查询未来15天活动，按高含金量优先、开始时间升序生成 `calendar_summary`列表。
+- `event_query.py`返回下方详情列表所需的完整字段，但不返回原始网页全文、密钥和内部模型输出。
+- `filter_query.py`从启用的城市、活动分类标签和技术主题生成动态筛选项。
+
+三类查询都必须使用同一时间区间、同一时区和同一发布版本条件。前端不能用一份活动数据渲染日历、另一份本地数组渲染分类标签。
+
+#### 3.11.15 推送适配器和幂等处理
+
+推送通道统一为：
+
+```python
+class NotificationChannel(Protocol):
+    channel_type: str
+
+    async def send(self, message: NotificationMessage) -> DeliveryResult: ...
+```
+
+飞书、Server酱和通用 Webhook各自实现协议。Worker先在 `notification_deliveries`中创建唯一 `batch_key`，再调用外部服务；如果进程在发送后、写成功状态前崩溃，重试时先查询对方支持的幂等能力或使用相同批次键，不能无条件重复发送。
+
+推送消息只读取公开活动版本中的标题、时间、地点、主办方、分类标签、为什么值得去和报名链接。密钥由 `secret_values`在发送时解密到内存，发送完成后不写日志、不写任务快照。
+
+#### 3.11.16 Python测试分层
+
+第一版至少建立以下测试层，不用真实密钥、真实地图额度或真实推送：
+
+| 测试层 | 测试对象 | 示例 |
+| --- | --- | --- |
+| 单元测试 | 纯函数和领域服务 | 配置合并、日期范围、去重分数、分类校验、评分 |
+| 解析器测试 | 固定网页 fixture | Luma、Meetup和高校页面的标题、时间、地点、链接提取 |
+| 数据库集成测试 | PostgreSQL临时数据库 | 配置版本、任务租约、唯一幂等键、活动版本发布 |
+| 外部服务契约测试 | Mock HTTP响应 | 地图、模型、飞书和Server酱错误映射 |
+| 流程测试 | 完整 Worker pipeline | 固定来源→提取→合并→总结→通勤→发布→推送 |
+| API测试 | FastAPI TestClient | 草稿保存、版本冲突、公开日历和15天简述接口 |
+
+测试文件按行为命名，例如 `test_config_patch_persists_complete_json.py`、`test_calendar_brief_returns_fifteen_days.py`、`test_category_labels_require_evidence.py`。所有网络客户端必须通过依赖注入替换为 fake；测试不能访问真实活动网站或发送真实消息。
+
+#### 3.11.17 Python依赖、启动和开发命令
+
+Python项目使用 `pyproject.toml` 管理依赖，不把依赖版本散落在多个脚本中。第一版运行环境使用 Python 3.12或更高版本，正式部署时锁定完整依赖文件：
+
+```toml
+[project]
+name = "cityactivi-server"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "pydantic",
+  "pydantic-settings",
+  "sqlalchemy[asyncio]",
+  "asyncpg",
+  "alembic",
+  "httpx",
+  "beautifulsoup4",
+  "playwright",
+  "cryptography",
+  "argon2-cffi"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pytest-asyncio",
+  "respx",
+  "ruff",
+  "mypy"
+]
+```
+
+本地第一次启动顺序：
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+python -m playwright install chromium
+alembic upgrade head
+uvicorn app.main:app --app-dir services/api --reload
+python -m services.scheduler.app.main
+python -m services.worker.app.main
+pytest
+```
+
+生产环境不使用 `--reload`。API、Scheduler和Worker分别作为独立进程运行；Docker Compose负责进程编排，systemd负责服务器重启后的自动拉起。数据库迁移由发布脚本在启动新版本前执行，禁止应用进程启动时偷偷修改表结构。
+
 ## 四、运营配置
 
 本章是独立运营后台的完整配置模块。当前原型中的五个配置栏目全部归入本章；技术配置也放在现有“推送与自动化”栏目内部，不另建第六个主栏目。每个配置项都必须有保存位置、校验规则、实际生效对象和生效时间。
@@ -1014,7 +1594,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 
 ## 六、数据库详细设计
 
-### 6.1 PostgreSQL 字段规范
+### 6.1 数据库字段统一规则（PostgreSQL）
 
 - 所有业务主键使用 `uuid`。
 - 所有时间使用 `timestamptz`，即带时区时间。
@@ -1025,7 +1605,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 - 可搜索的固定事实使用普通列，配置快照和模型输出使用 `jsonb`。
 - 密钥不使用普通 `text` 保存，统一进入加密密钥表。
 
-### 6.2 运营用户表 `ops_users`
+### 6.2 谁可以登录运营后台（`ops_users`）
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
@@ -1041,7 +1621,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 
 索引：`email` 唯一索引，`is_active` 普通索引。
 
-### 6.3 登录会话表 `ops_sessions`
+### 6.3 登录状态和会话有效期（`ops_sessions`）
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
@@ -1058,7 +1638,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 
 索引：`token_hash` 唯一索引，`user_id, expires_at` 组合索引。
 
-### 6.4 活动助手表 `assistant_profiles`
+### 6.4 一套活动助手的基本信息（`assistant_profiles`）
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
@@ -1074,7 +1654,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 | `created_at` | timestamptz | 非空 | 创建时间 |
 | `updated_at` | timestamptz | 非空 | 更新时间 |
 
-### 6.5 配置版本表 `config_versions`
+### 6.5 配置草稿、正式版本和发布记录（`config_versions`）
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
@@ -1100,12 +1680,13 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 - 发布后禁止修改 `config_json`，只能创建下一版本。
 - `config_json` 建 GIN 索引只用于后台诊断，不作为主要业务查询方式。
 
-### 6.6 完整配置 JSON 字段
+### 6.6 配置里到底保存哪些内容（完整 `config_json`）
 
 `config_versions.config_json` 必须保存一份完整配置，不能只保存本次修改的字段，也不能使用空对象或空数组代替已经定义的配置项。前端可以用 `PATCH` 提交局部修改，但后端合并后写入数据库的 `config_json` 必须包含下面所有根字段和数组对象字段。
 
 | 根字段 | 必须包含的子字段 | 数据用途 |
 | --- | --- | --- |
+| `schema_version` | 配置结构版本号 | 让后端按版本执行配置迁移 |
 | `region` | 区域名称 | 页面标题和城市预设识别 |
 | `target_count` | 目标数量 | 正式活动最多发布数量 |
 | `hide_expired` | 是否隐藏过期活动 | 首页结果过滤 |
@@ -1128,6 +1709,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 
 ```json
 {
+  "schema_version": 1,
   "region": "大湾区",
   "target_count": 12,
   "hide_expired": true,
@@ -1405,7 +1987,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 - 允许为空的字段必须在 Pydantic 模型中明确声明为可空，例如活动结束时间、封面地址、报名人数和费用；配置章节中的必填字段不能用空字符串代替。
 - 后端启动时校验根字段集合、数组对象字段集合和 `schema_version`。缺少字段时先用版本化默认值补齐并生成迁移记录，禁止静默丢字段。
 
-### 6.7 加密密钥表 `secret_values`
+### 6.7 大模型、推送和地图密钥的加密存储（`secret_values`）
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
@@ -1423,7 +2005,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 
 主加密密钥来自服务器环境，不保存到数据库。数据库泄露时，攻击者不能仅凭 `secret_values` 解密API密钥。
 
-### 6.8 大模型服务表 `model_providers`
+### 6.8 使用哪一个大模型服务（`model_providers`）
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
@@ -1445,7 +2027,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 | `created_at` | timestamptz | 非空 | 创建时间 |
 | `updated_at` | timestamptz | 非空 | 更新时间 |
 
-### 6.9 系统运行参数表 `system_settings`
+### 6.9 抓取和系统运行参数（`system_settings`）
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
@@ -1461,7 +2043,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 
 数据库连接密码不进入该表。
 
-### 6.10 数据库运行配置修订表 `runtime_config_revisions`
+### 6.10 数据库连接切换和回滚记录（`runtime_config_revisions`）
 
 该表只保存数据库配置的非敏感摘要和应用结果，完整连接配置保存在服务器外部加密文件。
 
@@ -1483,7 +2065,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 | `applied_at` | timestamptz | 可空 | 应用时间 |
 | `created_at` | timestamptz | 非空 | 创建时间 |
 
-### 6.11 任务表 `job_runs`
+### 6.11 一次完整的自动化运行（`job_runs`）
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
@@ -1511,7 +2093,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 
 索引：`status, scheduled_for`、`profile_id, created_at desc`、`lease_expires_at`。
 
-### 6.12 任务步骤表 `job_steps`
+### 6.12 一次运行里的每个处理步骤（`job_steps`）
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
@@ -1529,7 +2111,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 
 唯一约束：`job_id, step_name, attempt_number`。
 
-### 6.13 搜索任务表 `search_tasks`
+### 6.13 一次具体的搜索请求（`search_tasks`）
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -1546,7 +2128,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 | `finished_at` | timestamptz | 完成时间 |
 | `error_message` | text | 错误摘要 |
 
-### 6.14 原始网页表 `raw_documents`
+### 6.14 抓取到的网页原文和清洗结果（`raw_documents`）
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -1570,7 +2152,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 
 索引：`canonical_url`、`content_hash`、`job_id, fetched_at`。
 
-### 6.15 候选活动表 `event_candidates`
+### 6.15 从网页提取出的候选活动（`event_candidates`）
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -1603,7 +2185,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 | `created_at` | timestamptz | 创建时间 |
 | `updated_at` | timestamptz | 更新时间 |
 
-### 6.16 稳定活动表 `events`
+### 6.16 一场活动的主记录（`events`）
 
 | 字段 | 类型 | 约束 | 说明 |
 | --- | --- | --- | --- |
@@ -1617,7 +2199,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 | `created_at` | timestamptz | 非空 | 创建时间 |
 | `updated_at` | timestamptz | 非空 | 更新时间 |
 
-### 6.17 活动版本表 `event_versions`
+### 6.17 一场活动某一次确认后的内容版本（`event_versions`）
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -1693,7 +2275,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 
 `calendar_summary` 不是 `summary` 的截断结果。它由大模型根据已经核验的标题、议程、主办方和地点生成，限制为1至3句、80至220个中文字符，用于日历上方“未来15天活动简述”区域；没有通过证据核验就不能写入公开活动版本。
 
-### 6.18 活动证据表 `event_evidence`
+### 6.18 活动字段对应的网页原文证据（`event_evidence`）
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -1711,7 +2293,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 
 索引：`event_version_id, field_name`、`raw_document_id`。
 
-### 6.19 大模型调用表 `llm_runs`
+### 6.19 一次大模型调用及其结果（`llm_runs`）
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -1735,7 +2317,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 | `started_at` | timestamptz | 开始时间 |
 | `finished_at` | timestamptz | 完成时间 |
 
-### 6.20 推送通道表 `notification_channels`
+### 6.20 推送到哪里以及推送规则（`notification_channels`）
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -1753,7 +2335,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 | `created_at` | timestamptz | 创建时间 |
 | `updated_at` | timestamptz | 更新时间 |
 
-### 6.21 推送记录表 `notification_deliveries`
+### 6.21 每一条消息是否真正送达（`notification_deliveries`）
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -1772,7 +2354,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 | `created_at` | timestamptz | 创建时间 |
 | `updated_at` | timestamptz | 更新时间 |
 
-### 6.22 来源健康度表 `source_health`
+### 6.22 每个活动来源是否健康（`source_health`）
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -1789,7 +2371,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 
 主键使用 `profile_id, source_item_id` 组合键。
 
-### 6.23 审计日志表 `audit_logs`
+### 6.23 谁在什么时候改了什么（`audit_logs`）
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -1806,7 +2388,7 @@ Runtime Controller 是一个很小的本机运行控制服务，不暴露公网�
 
 审计日志只记录密钥“已设置、已替换、已清除”，不能记录密钥值。
 
-### 6.24 主要数据关系
+### 6.24 这些数据之间怎么关联
 
 ```text
 ops_users
@@ -1841,7 +2423,7 @@ events
 - 删除推送通道前检查是否存在发送中的记录；历史推送记录保留通道名称快照。
 - 活动下架通过状态字段实现，不删除历史版本和证据。
 
-### 6.25 关键事务边界
+### 6.25 哪些写入必须一次完成
 
 | 操作 | 必须在同一数据库事务中完成的内容 |
 | --- | --- |
