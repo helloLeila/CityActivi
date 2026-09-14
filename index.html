@@ -480,41 +480,6 @@
       font-size: 11px;
     }
 
-    .event-capacity {
-      align-self: stretch;
-      padding-left: 20px;
-      border-left: 1px solid var(--line);
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-    }
-
-    .capacity-value {
-      font-size: 15px;
-      line-height: 1.35;
-      font-weight: 600;
-      font-variant-numeric: tabular-nums;
-    }
-
-    .capacity-label {
-      margin-top: 4px;
-      color: var(--quiet);
-      font-size: 11px;
-    }
-
-    .capacity-line {
-      width: 100%;
-      height: 2px;
-      margin-top: 13px;
-      background: var(--line);
-    }
-
-    .capacity-line span {
-      display: block;
-      height: 100%;
-      background: var(--ink);
-    }
-
     .empty-state {
       padding: 72px 0;
       border-bottom: 1px solid var(--line);
@@ -678,12 +643,6 @@
       line-height: 1.55;
     }
 
-    .calendar-capacity {
-      margin-top: auto;
-      padding-top: 18px;
-      color: var(--quiet);
-      font-size: 10px;
-    }
 
     .calendar-overview {
       border-top: 1px solid var(--line-strong);
@@ -2082,17 +2041,6 @@
 
       .event-item { grid-template-columns: minmax(0, 1fr); }
 
-      .event-capacity {
-        grid-column: 2;
-        padding: 0;
-        border-left: 0;
-        flex-direction: row;
-        align-items: center;
-        justify-content: flex-start;
-        gap: 10px;
-      }
-
-      .capacity-line { width: 92px; margin: 0; }
       .event-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
       .config-workspace { padding-right: 36px; padding-left: 36px; }
@@ -2166,12 +2114,6 @@
 
       .event-cover { aspect-ratio: 16 / 9; }
       .event-title { font-size: 20px; }
-
-      .event-capacity {
-        grid-column: 1;
-        padding-top: 12px;
-        border-top: 1px solid var(--line);
-      }
 
       .event-facts { gap: 9px 14px; }
       .event-summary { font-size: 12px; }
@@ -7103,6 +7045,415 @@
       }
     }
   </style>
+  <style>
+    /* Meetup-inspired shell: preserve the calendar content while improving discovery ergonomics. */
+    .site-header {
+      background: rgba(255, 255, 255, 0.96);
+      border-bottom-color: #e6e6e2;
+    }
+
+    .header-inner,
+    .activity-main { width: min(1240px, calc(100% - 56px)); }
+
+    .brand { gap: 10px; font-size: 17px; }
+    .brand-mark { background: var(--accent); border-radius: 4px; }
+    .brand-mark::after { background: var(--ink); border-radius: 2px; }
+
+    .activity-main { padding-top: 42px; }
+
+    .activity-intro {
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 36px;
+      padding: 24px 0 34px;
+    }
+
+    .activity-intro h1 {
+      max-width: 760px;
+      font-size: clamp(30px, 4vw, 48px);
+      letter-spacing: -0.02em;
+    }
+
+    .intro-side { max-width: 360px; }
+    .intro-stats { gap: 18px; }
+
+    .discovery-toolbar {
+      position: sticky;
+      top: var(--header-height);
+      z-index: 10;
+      display: grid;
+      grid-template-columns: minmax(260px, 1fr) auto auto auto;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 0;
+      background: rgba(247, 247, 244, 0.96);
+      border-top: 1px solid var(--line-strong);
+      border-bottom: 1px solid var(--line-strong);
+      backdrop-filter: blur(12px);
+    }
+
+    .activity-search-shell {
+      min-height: 44px;
+      border: 1px solid var(--line-strong);
+      border-radius: 5px;
+      background: var(--surface);
+      box-shadow: 0 1px 2px rgba(27, 27, 25, 0.04);
+    }
+
+    .activity-search-shell:focus-within {
+      border-color: var(--ink);
+      box-shadow: 0 0 0 3px rgba(237, 90, 58, 0.13);
+    }
+
+    .quick-filter,
+    .more-filters {
+      min-height: 40px;
+      border: 1px solid var(--line-strong);
+      border-radius: 20px;
+      padding: 0 14px;
+      background: var(--surface);
+      color: var(--ink);
+      cursor: pointer;
+      transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
+    }
+
+    .quick-filter:hover,
+    .more-filters:hover { border-color: var(--accent); transform: translateY(-1px); }
+    .quick-filter.is-active,
+    .more-filters[aria-expanded="true"] { border-color: var(--accent); background: var(--accent-soft); }
+
+    .result-count { padding-bottom: 0; }
+
+    .date-group { grid-template-columns: 96px minmax(0, 1fr); }
+    .date-stamp { padding-right: 18px; }
+    .event-list { padding-left: 24px; }
+
+    .calendar-event,
+    .index-event {
+      border-radius: 6px;
+      box-shadow: 0 1px 0 rgba(27, 27, 25, 0.05);
+      transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+    }
+
+    .calendar-event:hover,
+    .index-event:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 10px 24px rgba(27, 27, 25, 0.1);
+    }
+
+    @media (max-width: 760px) {
+      .header-inner,
+      .activity-main { width: min(100% - 32px, 1240px); }
+      .header-context { display: none; }
+      .activity-intro { grid-template-columns: 1fr; gap: 18px; }
+      .intro-side { max-width: none; }
+      .discovery-toolbar {
+        position: static;
+        grid-template-columns: 1fr auto;
+      }
+      .activity-search-shell { grid-column: 1 / -1; }
+      .quick-filter-group { grid-column: 1 / -1; display: flex; overflow-x: auto; gap: 8px; padding-bottom: 2px; }
+      .result-count { justify-self: end; }
+      .date-group { grid-template-columns: 64px minmax(0, 1fr); }
+      .date-stamp { padding-right: 10px; }
+      .event-list { padding-left: 14px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .calendar-event, .index-event, .quick-filter, .more-filters { transition: none; }
+    }
+
+    /* Stronger discovery shell: the data stays intact while the page gains a Meetup-like rhythm. */
+    body[data-theme="calendar"] {
+      --paper: #f6f3f0;
+      --surface: #ffffff;
+      --surface-muted: #eee9e5;
+      --line: #ded7d1;
+      --line-strong: #c9beb6;
+      --accent: #f6583b;
+      --accent-soft: #ffe5df;
+    }
+
+    body[data-theme="calendar"] .site-header {
+      height: 72px;
+      background: #fff;
+      border-bottom: 1px solid #e4ddd8;
+      box-shadow: 0 2px 10px rgba(59, 43, 35, 0.06);
+    }
+
+    body[data-theme="calendar"] .header-inner {
+      width: min(1280px, calc(100% - 64px));
+    }
+
+    body[data-theme="calendar"] .brand-mark {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      box-shadow: 4px 4px 0 #1b1b19;
+    }
+
+    body[data-theme="calendar"] .header-context {
+      margin-left: 18px;
+      padding-left: 18px;
+      color: #5f554f;
+      font-size: 13px;
+    }
+
+    body[data-theme="calendar"] .discovery-nav { display: flex; gap: 4px; margin-left: 22px; }
+    body[data-theme="calendar"] .discovery-nav-link { min-height: 36px; border: 0; border-radius: 18px; padding: 0 13px; color: #6f625b; background: transparent; cursor: pointer; font-size: 14px; }
+    body[data-theme="calendar"] .discovery-nav-link:hover,
+    body[data-theme="calendar"] .discovery-nav-link.is-active { color: var(--ink); background: #f2ece8; }
+
+    body[data-theme="calendar"] .header-actions .solid-button {
+      min-height: 40px;
+      border-radius: 20px;
+      padding-inline: 18px;
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    body[data-theme="calendar"] .activity-main {
+      width: min(1280px, calc(100% - 64px));
+      padding-top: 28px;
+    }
+
+    body[data-theme="calendar"] .activity-intro {
+      position: relative;
+      grid-template-columns: minmax(0, 1fr) 390px;
+      min-height: 330px;
+      margin-bottom: 28px;
+      padding: 46px 52px;
+      border-radius: 14px;
+      overflow: hidden;
+      background: #1f1b19;
+      color: #fff;
+      box-shadow: 0 14px 34px rgba(59, 43, 35, 0.16);
+    }
+
+    body[data-theme="calendar"] .activity-intro::after {
+      content: "";
+      position: absolute;
+      right: -48px;
+      bottom: -64px;
+      width: 250px;
+      height: 250px;
+      border: 42px solid var(--accent);
+      border-radius: 50%;
+      opacity: .9;
+    }
+
+    body[data-theme="calendar"] .activity-intro h1 {
+      position: relative;
+      z-index: 1;
+      max-width: 680px;
+      color: #fff;
+      font-size: clamp(34px, 5vw, 62px);
+      line-height: 1.05;
+      letter-spacing: -0.03em;
+    }
+
+    body[data-theme="calendar"] .activity-intro::before { content: "在你的城市，找到下一件值得去做的事"; position: absolute; left: 52px; bottom: 38px; z-index: 1; color: #d8c9c1; font-size: 17px; }
+
+    body[data-theme="calendar"] .intro-date { color: #ff9b87; }
+    body[data-theme="calendar"] .intro-side { position: relative; z-index: 1; }
+    body[data-theme="calendar"] .intro-side span,
+    body[data-theme="calendar"] .intro-side strong { color: #f4eae5; }
+    body[data-theme="calendar"] .intro-source { color: #b8aaa2 !important; }
+
+    body[data-theme="calendar"] .discovery-toolbar {
+      top: 72px;
+      margin-bottom: 28px;
+      padding: 16px;
+      border: 1px solid #e1d9d3;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, .98);
+      box-shadow: 0 6px 18px rgba(59, 43, 35, .08);
+    }
+
+    body[data-theme="calendar"] .activity-search-shell {
+      min-height: 50px;
+      border-radius: 7px;
+      background: #faf8f6;
+    }
+
+    body[data-theme="calendar"] .activity-search-shell input {
+      font-size: 14px;
+    }
+
+    body[data-theme="calendar"] .quick-filter,
+    body[data-theme="calendar"] .more-filters {
+      min-height: 42px;
+      border-radius: 7px;
+      font-weight: 600;
+    }
+
+    body[data-theme="calendar"] .quick-filter.is-active,
+    body[data-theme="calendar"] .more-filters[aria-expanded="true"] {
+      color: #fff;
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    body[data-theme="calendar"] .date-group {
+      grid-template-columns: 120px minmax(0, 1fr);
+      border-bottom: 0;
+      margin-bottom: 26px;
+    }
+
+    body[data-theme="calendar"] .date-stamp {
+      padding: 12px 24px 12px 0;
+      border-right: 0;
+    }
+
+    body[data-theme="calendar"] .date-number {
+      color: var(--accent);
+      font-size: 44px;
+      font-weight: 700;
+    }
+
+    body[data-theme="calendar"] .date-weekday {
+      color: #5f554f;
+      font-weight: 600;
+    }
+
+    body[data-theme="calendar"] .event-list {
+      display: grid;
+      gap: 18px;
+      padding: 0;
+    }
+
+    body[data-theme="calendar"] .calendar-event {
+      border: 1px solid #e0d8d2;
+      border-radius: 12px;
+      background: #fff;
+      overflow: hidden;
+    }
+
+    body[data-theme="calendar"] .calendar-event-body {
+      min-height: 0;
+      padding: 20px 22px 22px;
+    }
+
+    body[data-theme="calendar"] .calendar-title {
+      margin-top: 8px;
+      font-size: 19px;
+      line-height: 1.32;
+    }
+
+    body[data-theme="calendar"] .calendar-summary {
+      max-width: 760px;
+      font-size: 14px;
+      line-height: 1.65;
+    }
+
+    body[data-theme="calendar"] .calendar-time {
+      font-size: 15px;
+    }
+
+    body[data-theme="calendar"] .calendar-place,
+    body[data-theme="calendar"] .calendar-fact {
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    body[data-theme="calendar"] .calendar-place strong,
+    body[data-theme="calendar"] .calendar-fact strong {
+      margin-bottom: 4px;
+      font-size: 12px;
+      letter-spacing: .04em;
+    }
+
+    body[data-theme="calendar"] .date-weekday {
+      font-size: 15px;
+    }
+
+    body[data-theme="calendar"] .result-count,
+    body[data-theme="calendar"] .intro-source {
+      font-size: 14px;
+    }
+
+    body[data-theme="calendar"] .quick-filter,
+    body[data-theme="calendar"] .more-filters {
+      font-size: 15px;
+    }
+
+    body[data-theme="calendar"] .calendar-title {
+      font-size: 22px;
+    }
+
+    body[data-theme="calendar"] .calendar-event-body {
+      padding: 24px 26px 26px;
+    }
+
+    body[data-theme="calendar"] .calendar-facts {
+      gap: 12px;
+      margin-top: 22px;
+      padding-top: 16px;
+    }
+
+    body[data-theme="calendar"] .calendar-summary {
+      font-size: 16px;
+      line-height: 1.7;
+    }
+
+    /* Final readability pass: explicit overrides for the dense calendar view. */
+    body[data-theme="calendar"] #activity-page { font-size: 16px !important; }
+    body[data-theme="calendar"] #activity-page .calendar-title { font-size: 24px !important; line-height: 1.35 !important; }
+    body[data-theme="calendar"] #activity-page .calendar-time { font-size: 16px !important; }
+    body[data-theme="calendar"] #activity-page .calendar-place,
+    body[data-theme="calendar"] #activity-page .calendar-fact { font-size: 16px !important; line-height: 1.75 !important; }
+    body[data-theme="calendar"] #activity-page .calendar-place strong,
+    body[data-theme="calendar"] #activity-page .calendar-fact strong { font-size: 13px !important; }
+    body[data-theme="calendar"] #activity-page .calendar-summary { font-size: 17px !important; line-height: 1.75 !important; }
+    body[data-theme="calendar"] #activity-page .date-number { font-size: 48px !important; }
+    body[data-theme="calendar"] #activity-page .date-weekday { font-size: 16px !important; }
+    body[data-theme="calendar"] #activity-page .result-count { font-size: 15px !important; }
+    body[data-theme="calendar"] #activity-page .quick-filter,
+    body[data-theme="calendar"] #activity-page .more-filters { font-size: 16px !important; }
+    body[data-theme="calendar"] #activity-page .activity-search-shell input { font-size: 16px !important; }
+
+    /* Detail cards need their own type scale; they are the reading surface, not metadata. */
+    body[data-theme="calendar"] #activity-page .calendar-details-heading h2 { font-size: 20px !important; }
+    body[data-theme="calendar"] #activity-page .calendar-details-heading span { font-size: 14px !important; }
+    body[data-theme="calendar"] #activity-page .calendar-detail { padding: 32px 0 36px; }
+    body[data-theme="calendar"] #activity-page .calendar-detail-date { font-size: 15px !important; line-height: 1.6 !important; }
+    body[data-theme="calendar"] #activity-page .calendar-detail-date strong { font-size: 38px !important; }
+    body[data-theme="calendar"] #activity-page .calendar-detail-title { font-size: 28px !important; line-height: 1.3 !important; }
+    body[data-theme="calendar"] #activity-page .calendar-rating { font-size: 14px !important; }
+    body[data-theme="calendar"] #activity-page .calendar-detail-type { font-size: 14px !important; }
+    body[data-theme="calendar"] #activity-page .calendar-detail-meta { font-size: 16px !important; line-height: 1.7 !important; }
+    body[data-theme="calendar"] #activity-page .calendar-detail-meta strong,
+    body[data-theme="calendar"] #activity-page .calendar-detail-summary strong { font-size: 13px !important; }
+    body[data-theme="calendar"] #activity-page .calendar-detail-summary { font-size: 17px !important; line-height: 1.8 !important; }
+    body[data-theme="calendar"] #activity-page .calendar-detail-description { margin-top: 10px; }
+    body[data-theme="calendar"] #activity-page .calendar-detail-columns { gap: 34px; margin-top: 28px; padding-top: 22px; }
+    body[data-theme="calendar"] #activity-page .calendar-detail-section h4 { font-size: 13px !important; }
+    body[data-theme="calendar"] #activity-page .calendar-detail-section ul { font-size: 16px !important; line-height: 1.8 !important; }
+    body[data-theme="calendar"] #activity-page .calendar-detail-link { font-size: 16px !important; }
+
+    @media (max-width: 760px) {
+      body[data-theme="calendar"] #activity-page .calendar-detail-head { grid-template-columns: 72px minmax(0, 1fr); gap: 16px; }
+      body[data-theme="calendar"] #activity-page .calendar-detail-title { font-size: 23px !important; }
+      body[data-theme="calendar"] #activity-page .calendar-detail-meta,
+      body[data-theme="calendar"] #activity-page .calendar-detail-summary,
+      body[data-theme="calendar"] #activity-page .calendar-detail-columns,
+      body[data-theme="calendar"] #activity-page .calendar-detail-link { margin-left: 88px; }
+      body[data-theme="calendar"] #activity-page .calendar-detail-columns { grid-template-columns: 1fr; gap: 20px; }
+    }
+
+    @media (max-width: 760px) {
+      body[data-theme="calendar"] .discovery-nav { display: none; }
+      body[data-theme="calendar"] .header-inner,
+      body[data-theme="calendar"] .activity-main { width: calc(100% - 32px); }
+      body[data-theme="calendar"] .activity-intro { min-height: 0; padding: 28px 24px 76px; border-radius: 10px; }
+      body[data-theme="calendar"] .activity-intro::before { left: 24px; bottom: 28px; font-size: 14px; }
+      body[data-theme="calendar"] .activity-intro::after { right: -90px; bottom: -120px; }
+      body[data-theme="calendar"] .discovery-toolbar { top: 0; margin-bottom: 20px; }
+      body[data-theme="calendar"] .date-group { grid-template-columns: 72px minmax(0, 1fr); }
+      body[data-theme="calendar"] .date-number { font-size: 34px; }
+      body[data-theme="calendar"] .calendar-event-body { padding: 16px; }
+    }
+  </style>
 </head>
 <body data-theme="calendar">
   <div id="activity-page">
@@ -7113,6 +7464,11 @@
           <span>城事</span>
         </button>
         <div class="header-context">大湾区技术活动 · 日历视图</div>
+        <nav class="discovery-nav" aria-label="活动导航">
+          <button type="button" class="discovery-nav-link is-active">发现活动</button>
+          <button type="button" class="discovery-nav-link">我的日历</button>
+          <button type="button" class="discovery-nav-link">主办方</button>
+        </nav>
         <div class="header-actions">
           <button id="design-button" class="solid-button" type="button">设计</button>
         </div>
@@ -7376,7 +7732,6 @@
               <div class="toggle-row"><div class="toggle-copy"><strong>来源</strong><span>例如 Luma、Meetup、学校或开源社区</span></div><label class="switch"><input class="dirty-control" type="checkbox" checked aria-label="显示来源" /><span class="switch-track"></span></label></div>
               <div class="toggle-row"><div class="toggle-copy"><strong>收录理由</strong><span>用一两句话解释为什么值得去</span></div><label class="switch"><input class="dirty-control" type="checkbox" checked aria-label="显示收录理由" /><span class="switch-track"></span></label></div>
               <div class="toggle-row"><div class="toggle-copy"><strong>交通估算</strong><span>从深大地铁站出发的时间和费用</span></div><label class="switch"><input class="dirty-control" type="checkbox" checked aria-label="显示交通估算" /><span class="switch-track"></span></label></div>
-              <div class="toggle-row"><div class="toggle-copy"><strong>报名人数</strong><span>默认关闭，不让报名数字抢占活动信息</span></div><label class="switch"><input class="dirty-control" type="checkbox" aria-label="显示报名人数" /><span class="switch-track"></span></label></div>
               <div class="toggle-row"><div class="toggle-copy"><strong>费用</strong><span>免费 / 付费及官方公布的价格</span></div><label class="switch"><input class="dirty-control" type="checkbox" checked aria-label="显示费用" /><span class="switch-track"></span></label></div>
               <div class="toggle-row"><div class="toggle-copy"><strong>原文链接</strong><span>打开原文页面，进入报名入口</span></div><label class="switch"><input class="dirty-control" type="checkbox" checked aria-label="显示原文链接" /><span class="switch-track"></span></label></div>
               <div class="toggle-row"><div class="toggle-copy"><strong>活动封面</strong><span>仅在来源提供可用图片时显示</span></div><label class="switch"><input class="dirty-control" type="checkbox" aria-label="显示活动封面" /><span class="switch-track"></span></label></div>
@@ -7468,8 +7823,6 @@
         why: "这不是泛泛介绍 Agent 概念的分享，而是把评测、工具调用失败和线上可观测性放到生产环境里一起看。对正在做 Agent 应用或平台的人，现场的故障案例能帮助你判断问题到底出在模型、工具链，还是回归流程没有建立起来。",
         takeaways: ["Agent 评测的常见指标与测试集设计", "工具调用失败的恢复策略", "如何建立线上可观测性与回归流程"],
         prerequisites: ["了解 LLM API、function calling 和基本 Prompt", "能读懂 Python 或 TypeScript 示例", "提前看过一个 Agent 框架的基本结构"],
-        registered: 86,
-        capacity: 120,
         image: "https://images.unsplash.com/photo-1540575467063-178a50c2df87?auto=format&fit=crop&w=1200&q=82",
         description: "围绕生产环境中的 Agent 评测、工具调用失败恢复与可观测性展开。三位分享者分别来自 AI 应用团队、基础设施团队与开源评测项目，议程包含真实故障案例。"
       },
@@ -7494,8 +7847,6 @@
         why: "它的价值不在于再演示一次 AI Coding，而在于把项目指令、MCP 工具和代码 Review 串成一条团队可以复用的工程流程。已经在使用 AI Coding 的工程师，可以带着自己的项目来对照，直接判断哪些权限边界和检查步骤还缺着。",
         takeaways: ["如何拆分项目级指令与个人偏好", "MCP 工具的权限和上下文边界", "AI 生成代码进入 Review 前的检查清单"],
         prerequisites: ["熟悉 Git 分支、Pull Request 和代码 Review", "了解 REST API 或 MCP 的基本概念", "准备一个可以现场演示的小项目"],
-        registered: 54,
-        capacity: 70,
         image: "https://images.unsplash.com/photo-1556761175-b413da4baf72?auto=format&fit=crop&w=1200&q=82",
         description: "面向已经在团队中使用 AI Coding 的工程师，演示如何组织项目指令、接入 MCP 工具并建立可复现的代码审查流程。现场保留 40 分钟动手环节。"
       },
@@ -7520,8 +7871,6 @@
         why: "活动把本地模型推理、开源 Agent 框架和隐私计算放在同一张技术地图里，重点是项目和基础设施的真实取舍，而不是行业趋势宣讲。它也提供了认识香港开源社区维护者的场景，但前提是你能跟上英语或粤语技术分享。",
         takeaways: ["香港本地开源 AI 项目的技术路线", "推理服务的成本与性能取舍", "隐私计算和开源模型结合的真实案例"],
         prerequisites: ["能阅读英文技术分享", "了解 Transformer 推理或模型部署基本术语", "准备一个想认识的开源项目或维护者"],
-        registered: 103,
-        capacity: 140,
         image: "https://images.unsplash.com/photo-1531058020387-3be344556be6?auto=format&fit=crop&w=1200&q=82",
         description: "本期聚焦本地模型推理、开源 Agent 框架与隐私计算。活动使用英语和粤语，包含三个短分享及开源项目现场演示，适合能够阅读英文技术资料的开发者。"
       },
@@ -7546,8 +7895,6 @@
         why: "这场论坛同时覆盖视觉语言动作模型、机器人操作数据和 sim-to-real，适合想把研究论文和实验系统放在一起理解的人。相比只看模型效果的演示，你能更清楚地看到数据采集、评测和真实环境迁移分别卡在哪里。",
         takeaways: ["视觉语言动作模型的训练与评测框架", "机器人操作数据如何从仿真迁移到真实环境", "当前具身智能研究的主要瓶颈"],
         prerequisites: ["了解深度学习、计算机视觉和强化学习基础", "知道 Transformer 和多模态模型的大致结构", "提前浏览议程中的论文标题"],
-        registered: 168,
-        capacity: 220,
         image: "https://images.unsplash.com/photo-1528605248644-14dd04022da1?auto=format&fit=crop&w=1200&q=82",
         description: "议题覆盖视觉语言动作模型、机器人操作数据采集与 sim-to-real。公开议程包含论文工作解读和实验系统演示，非商业路演。"
       },
@@ -7572,8 +7919,6 @@
         why: "它刻意绕开产品采购和趋势话题，直接讨论向量索引、查询计划和混合检索怎样落到数据库实现上。对做搜索、数据库或 RAG 基础设施的人，这些内容更接近容量、召回和延迟之间的实际工程取舍。",
         takeaways: ["向量索引与传统倒排索引的组合方式", "混合检索的查询计划和召回评估", "RAG 基础设施的容量与延迟问题"],
         prerequisites: ["了解 SQL、索引和基本查询优化", "知道 Embedding、Top-K 和召回率含义", "有数据库或搜索系统实践更容易跟上"],
-        registered: 41,
-        capacity: 80,
         image: "https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1200&q=82",
         description: "从索引结构、查询优化和混合检索三个层面讨论向量数据库实现，不覆盖产品采购和行业趋势。适合数据库、搜索与 RAG 基础设施方向工程师。"
       },
@@ -7598,8 +7943,6 @@
         why: "这场活动不是罗列性能名词，而是用线上监控数据把浏览器渲染、网络分发和发布流程串起来复盘。适合想把前端优化从经验判断变成可度量流程的人，尤其能带走一套性能预算和 CI 接入的思路。",
         takeaways: ["LCP、INP 和 CLS 的定位路径", "边缘渲染与缓存策略的取舍", "如何把性能预算接入 CI 和发布流程"],
         prerequisites: ["了解浏览器渲染和网络请求基础", "能阅读 JavaScript 或 TypeScript 代码", "准备一个自己遇到过的性能问题"],
-        registered: 72,
-        capacity: 100,
         image: "https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&w=1200&q=82",
         description: "从浏览器渲染、网络分发到发布流程，结合线上监控数据复盘一组真实性能问题。活动包含 30 分钟案例拆解和一段可复用的性能预算配置演示。"
       },
@@ -7624,8 +7967,6 @@
         why: "活动不从 Rust 语法讲起，而是直接进入 Tokio runtime 的任务调度、取消语义、背压和故障恢复。已经写过服务端代码的人，可以把自己的并发问题带来对照，重点理解压测结果如何连接到服务恢复策略。",
         takeaways: ["Tokio task、channel 和 cancellation 的关系", "背压与连接池配置对延迟的影响", "如何为异步服务补充可观测性"],
         prerequisites: ["掌握 Rust 所有权、trait 和 error handling", "了解 HTTP 服务和并发模型", "提前阅读 Tokio 官方 runtime 文档"],
-        registered: 48,
-        capacity: 80,
         image: "https://images.unsplash.com/photo-1516116216624-53e697fedbea?auto=format&fit=crop&w=1200&q=82",
         description: "面向已经使用 Rust 构建服务的工程师，围绕 Tokio runtime 的任务调度、取消语义和背压策略展开。分享者会展示一个从压测到故障恢复的完整案例。"
       },
@@ -7650,8 +7991,6 @@
         why: "本期按一篇推理系统论文逐段精读，从 KV Cache 的内存布局一路讲到实验指标，核心是理解显存、吞吐和延迟为什么会互相牵制。它不提供基础课程，更适合已经接触模型服务或系统研究、希望把论文结果和生产指标对应起来的人。",
         takeaways: ["KV Cache 对显存和吞吐的影响", "Paged Attention 的核心数据结构", "论文实验如何与生产推理指标对应"],
         prerequisites: ["了解 Transformer attention 和 batch 推理", "能阅读英文论文图表", "提前读论文摘要和实验设置"],
-        registered: 62,
-        capacity: 90,
         image: "https://images.unsplash.com/photo-1531482615713-2afd69097998?auto=format&fit=crop&w=1200&q=82",
         description: "本期选择一篇推理系统论文做逐段精读，从 KV Cache 的内存布局讲到实验指标。活动不提供基础课程，更适合有模型服务或系统研究背景的参与者。"
       },
@@ -7676,8 +8015,6 @@
         why: "这场分享把 Agent 从 Demo 拆成产品边界、评测闭环和线上运营三个部分，讨论的是交给真实用户之后如何持续维护。对正在把原型推向生产的团队，人工接管、失败处理和隐性运维成本会比再做一个功能演示更有参考价值。",
         takeaways: ["任务边界、工具权限和人工接管的设计方法", "从离线样本到线上反馈的评测闭环", "如何识别 Agent 产品中的隐性运维成本"],
         prerequisites: ["了解 LLM API 和 structured output", "做过一个带工具调用的原型", "准备一个需要人工接管的业务场景"],
-        registered: 91,
-        capacity: 130,
         image: "https://images.unsplash.com/photo-1552664730-d307ca884978?auto=format&fit=crop&w=1200&q=82",
         description: "活动邀请产品负责人、应用工程师和评测负责人分别分享，重点讨论 Agent 工作流的边界、失败处理和线上运营。中间安排小组拆解，不做纯概念演讲。"
       },
@@ -7702,8 +8039,6 @@
         why: "活动用一个包含 API、队列和模型服务的示例系统，完整走过 OpenTelemetry 的埋点、采集与告警配置。正在维护微服务或 AI 推理平台的人，可以借这条链路检查自己的 Trace、Metric、Log 是否真的能在一次故障里互相对上。",
         takeaways: ["Trace、Metric、Log 的关联方式", "采样策略和高基数字段的成本控制", "如何从一次故障反推告警与仪表盘缺口"],
         prerequisites: ["了解 HTTP 服务和容器部署", "知道 Prometheus 或 Grafana 基本概念", "准备一条希望追踪的线上请求链路"],
-        registered: 115,
-        capacity: 160,
         image: "https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=1200&q=82",
         description: "通过一个包含 API、队列和模型服务的示例系统，演示 OpenTelemetry 的埋点、采集与告警配置。参与者可以带自己的服务链路来对照排查。"
       },
@@ -7728,8 +8063,6 @@
         why: "它关注的是开源模型部署、GPU 调度和推理框架的性能对比，适合想了解香港 AI 基础设施团队实际做法的人。活动以英文为主，价值在于把成本、吞吐、延迟和合规约束放到同一个部署问题里讨论。",
         takeaways: ["模型服务的 batching 与调度策略", "开源模型部署的成本和合规约束", "如何比较不同推理框架的真实指标"],
         prerequisites: ["能阅读英文技术分享", "了解 GPU 显存、batch 和 latency", "提前准备一个想比较的推理框架"],
-        registered: 84,
-        capacity: 120,
         image: "https://images.unsplash.com/photo-1521737711867-e3b97375f902?auto=format&fit=crop&w=1200&q=82",
         description: "三位来自模型平台和开源项目的分享者讨论推理服务、GPU 调度与开源模型落地，活动以英文为主，包含一段现场性能对比演示。"
       },
@@ -7754,8 +8087,6 @@
         why: "这场工作坊会从威胁建模开始，用可复现的 Prompt Injection、间接注入和工具越权样例检验防护效果。负责 Agent、RAG 或企业知识库安全的人，能把攻击面、红队测试集和输出过滤放进同一套回归流程，而不是只记住几个安全术语。",
         takeaways: ["Prompt Injection 的常见攻击面与威胁建模", "如何构建红队测试集和自动化回归", "检索、工具权限与输出过滤的分层防护"],
         prerequisites: ["了解 LLM API、RAG 或工具调用", "掌握基本 Web 安全概念", "自带电脑并准备一个可测试的对话应用"],
-        registered: 77,
-        capacity: 110,
         image: "https://images.unsplash.com/photo-1563013544-824ae1b704d3?auto=format&fit=crop&w=1200&q=82",
         description: "活动从威胁建模开始，现场演示 Prompt Injection、间接注入和工具越权，再用一组红队样本比较不同防护策略。更接近工程训练，不是安全概念科普。"
       },
@@ -7780,8 +8111,6 @@
         why: "这场活动不从模型效果开始，而是把 batching、显存占用和服务成本放在同一个推理链路里分析。对正在部署大模型或维护 GPU 服务的人，现场的压测数据能帮助你判断瓶颈到底来自模型、调度策略，还是基础设施配置。",
         takeaways: ["连续 batching 与请求调度的基本取舍", "显存、吞吐和延迟之间的关系", "如何把推理成本纳入服务容量规划"],
         prerequisites: ["了解 GPU 显存、batch 和 latency 基本概念", "接触过模型 API 或推理服务部署", "准备一个自己遇到过的吞吐或成本问题"],
-        registered: 68,
-        capacity: 100,
         image: "https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1200&q=82",
         description: "围绕连续 batching、显存管理和推理服务容量规划展开，包含一组真实压测数据和部署参数对比。适合 AI 应用、模型平台和基础设施工程师。"
       }
@@ -7830,7 +8159,7 @@
         { id: "channel-feishu", type: "飞书", name: "飞书自定义机器人", endpoint: "https://open.feishu.cn/open-apis/bot/v2/hook/••••", secret: "", enabled: true, status: "已连接" },
         { id: "channel-server", type: "Server 酱", name: "Server 酱", endpoint: "https://sct.ftqq.com/sendkey", secret: "", enabled: false, status: "未配置" }
       ],
-      displayFields: { community: true, topic: true, source: true, why: true, travel: true, registered: false, cost: false, sourceLink: true, cover: false, takeaways: true, prerequisites: true }
+      displayFields: { community: true, topic: true, source: true, why: true, travel: true, cost: false, sourceLink: true, cover: false, takeaways: true, prerequisites: true }
     };
 
     function clonePrototypeConfig(value) {
@@ -8129,7 +8458,6 @@
                 ${prototypeConfig.displayFields.topic ? `<span class="calendar-meta-secondary"><strong>方向</strong>${event.topic}</span>` : ""}
                 ${prototypeConfig.displayFields.source ? `<span class="calendar-meta-secondary"><strong>来源</strong>${event.source}</span>` : ""}
                 ${prototypeConfig.displayFields.cost && (event.cost || !prototypeConfig.preferences.hideUnknown) ? `<span class="calendar-meta-secondary"><strong>费用</strong>${event.cost || "以原文为准"}</span>` : ""}
-                ${prototypeConfig.displayFields.registered ? `<span class="calendar-meta-secondary"><strong>报名</strong>${event.registered || "—"} / ${event.capacity || "—"}</span>` : ""}
               </div>
             </div>
             ${prototypeConfig.displayFields.cover && event.image ? `<figure class="calendar-detail-cover"><img src="${event.image}" alt="${escapeHtml(event.title)} 活动现场" loading="lazy" /><figcaption>来源页面提供的活动图片</figcaption></figure>` : ""}
@@ -8707,7 +9035,6 @@
       "显示来源": "source",
       "显示收录理由": "why",
       "显示交通估算": "travel",
-      "显示报名人数": "registered",
       "显示费用": "cost",
       "显示原文链接": "sourceLink",
       "显示活动封面": "cover",
