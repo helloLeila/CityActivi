@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>城事 · 重构预览</title>
+  <style>
+    :root {
+      --ink: #17231e; --muted: #6e7a73; --line: #dbe4de; --paper: #f3f6f3;
+      --surface: #fff; --green: #287651; --green-soft: #e3f2e9; --acid: #d7f36a;
+      --amber: #f0b65c; --shadow: 0 18px 50px rgba(24, 45, 34, .10);
+      --font: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--paper); color: var(--ink); font-family: var(--font); }
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+    .shell { min-height: 100vh; }
+    .topbar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 28px; height: 72px; padding: 0 34px; background: rgba(255,255,255,.92); border-bottom: 1px solid var(--line); backdrop-filter: blur(16px); }
+    .brand { display: flex; align-items: center; gap: 11px; border: 0; background: transparent; color: var(--ink); font-weight: 800; font-size: 19px; }
+    .mark { width: 27px; height: 27px; border-radius: 8px; background: var(--ink); position: relative; }
+    .mark::after { content: ""; position: absolute; right: 5px; bottom: 5px; width: 7px; height: 7px; border-radius: 3px; background: var(--acid); }
+    .brand-title { color: var(--ink); font-size: 25px; font-weight: 800; letter-spacing: -.045em; }
+    .top-context { display: none; }
+    .top-nav { display: flex; gap: 5px; margin-left: auto; }
+    .top-nav button, .top-action { border: 0; border-radius: 9px; padding: 10px 13px; color: var(--muted); background: transparent; font-size: 13px; }
+    .top-nav button:hover, .top-nav button.active { color: var(--ink); background: var(--green-soft); }
+    .top-action { border: 1px solid var(--ink); color: #fff; background: var(--ink); font-weight: 700; }
+    .top-action:hover { background: #2d4137; }
+    main { width: min(1260px, calc(100% - 52px)); margin: 0 auto; padding: 32px 0 90px; }
+    .view { display: none; }
+    .view.active { display: block; animation: appear .28s ease both; }
+    #directory { position: relative; isolation: isolate; }
+    #particleField { position: absolute; z-index: 0; top: -24px; left: 50%; width: 100vw; height: 520px; transform: translateX(-50%); opacity: .72; pointer-events: none; }
+    #directory > *:not(#particleField) { position: relative; z-index: 1; }
+    @keyframes appear { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    .mast { display: flex; justify-content: space-between; align-items: end; gap: 26px; margin-bottom: 24px; }
+    .eyebrow { margin: 0 0 10px; color: var(--green); font-size: 12px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    h1, h2, h3, p { margin: 0; }
+    h1 { max-width: 740px; font-size: clamp(38px, 5vw, 64px); line-height: 1.02; letter-spacing: -.06em; }
+    .mast-note { max-width: 250px; color: var(--muted); font-size: 14px; line-height: 1.65; }
+    .toolbar { display: grid; grid-template-columns: minmax(260px, 1fr) auto auto auto; gap: 9px; align-items: center; margin-bottom: 22px; padding: 9px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 8px 22px rgba(24,45,34,.04); }
+    .search { display: flex; align-items: center; gap: 10px; min-height: 46px; padding: 0 14px; border: 1px solid var(--line); border-radius: 8px; background: #fbfdfb; }
+    .search span { color: var(--green); font-size: 18px; }
+    .search input { width: 100%; border: 0; outline: 0; background: transparent; color: var(--ink); }
+    .filter { min-height: 46px; border: 1px solid var(--line); border-radius: 8px; padding: 0 14px; color: var(--muted); background: #fff; font-weight: 700; }
+    .filter:hover, .filter.active { border-color: var(--green); color: var(--green); background: var(--green-soft); }
+    .summary-row { display: grid; grid-template-columns: 1.3fr .7fr; gap: 14px; margin-bottom: 22px; }
+    .summary, .focus { min-height: 110px; padding: 21px 24px; border-radius: 13px; }
+    .summary { display: flex; align-items: center; justify-content: space-between; gap: 18px; background: var(--ink); color: #eef8f1; }
+    .summary strong { font-size: 36px; letter-spacing: -.05em; }
+    .summary span { display: block; margin-top: 6px; color: #a9c7b5; font-size: 13px; }
+    .summary .meta { color: #d7f36a; font-size: 13px; font-weight: 700; }
+    .focus { background: var(--acid); }
+    .focus small { display: block; margin-bottom: 9px; color: #3e5b21; font-weight: 800; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
+    .focus p { font-size: 15px; line-height: 1.55; }
+    .section-head { display: flex; align-items: center; justify-content: space-between; margin: 8px 0 12px; }
+    .section-head h2 { font-size: 18px; letter-spacing: -.03em; }
+    .section-head span { color: var(--muted); font-size: 12px; }
+    .calendar-overview { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+    .calendar-overview-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 58px; padding: 0 18px; border-bottom: 1px solid var(--line); background: #fbfdfb; }
+    .calendar-overview-head strong { font-size: 15px; }
+    .calendar-overview-head span { color: var(--muted); font-size: 12px; }
+    .calendar-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+    .calendar-day { min-height: 146px; padding: 10px 9px 9px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: #fff; }
+    .calendar-day:nth-child(7n) { border-right: 0; }
+    .calendar-day.is-empty { background: #f4f6f3; }
+    .calendar-day-header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; color: var(--muted); font-size: 11px; }
+    .calendar-day-number { color: var(--ink); font-size: 17px; font-weight: 800; }
+    .calendar-day-events { display: grid; gap: 6px; }
+    .calendar-slot { display: block; width: 100%; min-height: 82px; padding: 8px 8px 7px; border: 1px solid #cbded1; border-radius: 7px; color: #234532; background: #e7f3e9; text-align: left; transition: transform .18s ease, box-shadow .18s ease; }
+    .calendar-slot:hover, .calendar-slot.selected { transform: translateY(-2px); box-shadow: 0 8px 16px rgba(39, 103, 69, .16); }
+    .calendar-slot.is-featured { border-color: #f1c16f; color: #5c421c; background: #fff0cf; }
+    .calendar-slot.is-academic { border-color: #c9d6f5; color: #30497a; background: #e9efff; }
+    .calendar-slot-topline { display: flex; justify-content: space-between; gap: 6px; font-size: 10px; font-weight: 800; }
+    .calendar-slot-rating { opacity: .72; }
+    .calendar-slot-title { display: block; margin-top: 6px; font-size: 12px; font-weight: 800; line-height: 1.36; }
+    .calendar-slot-city, .calendar-slot-kind { display: block; margin-top: 4px; font-size: 10px; opacity: .72; }
+    .calendar-details { margin-top: 28px; }
+    .calendar-details-heading { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 12px; }
+    .calendar-details-heading h2 { font-size: 21px; letter-spacing: -.04em; }
+    .calendar-details-heading span { color: var(--muted); font-size: 12px; }
+    .calendar-detail { padding: 22px 0 28px; border-top: 1px solid var(--line); }
+    .calendar-detail.is-targeted { animation: detailPulse 1.2s ease both; }
+    @keyframes detailPulse { 0%, 100% { background: transparent; } 25%, 70% { background: rgba(215, 243, 106, .24); } }
+    .calendar-detail-head { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 18px; }
+    .calendar-detail-date { padding-top: 2px; color: var(--green); }
+    .calendar-detail-date strong { display: block; font-size: 32px; line-height: 1; letter-spacing: -.05em; }
+    .calendar-detail-month { display: block; margin-top: 5px; font-size: 11px; font-weight: 800; }
+    .calendar-detail-weekday { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+    .calendar-detail-title-line { display: flex; justify-content: space-between; gap: 16px; }
+    .calendar-detail-title { font-size: 23px; line-height: 1.25; letter-spacing: -.04em; }
+    .calendar-detail-badges { display: flex; gap: 6px; flex-wrap: wrap; justify-content: end; }
+    .calendar-domain-tag, .calendar-rating { align-self: start; padding: 5px 8px; border-radius: 999px; color: #46605a; background: #edf3ee; font-size: 11px; font-weight: 800; white-space: nowrap; }
+    .calendar-rating.is-featured { color: #684719; background: #fff0cf; }
+    .calendar-detail-type { display: block; margin-top: 7px; color: var(--muted); font-size: 12px; }
+    .calendar-detail-content { margin-left: 94px; }
+    .calendar-detail-meta { margin-top: 18px; }
+    .calendar-meta-primary-row, .calendar-meta-secondary-row { display: flex; flex-wrap: wrap; gap: 12px 24px; }
+    .calendar-meta-primary-row { padding-bottom: 13px; border-bottom: 1px solid var(--line); }
+    .calendar-meta-primary, .calendar-meta-secondary { color: #44534b; font-size: 13px; line-height: 1.45; }
+    .calendar-meta-primary strong, .calendar-meta-secondary strong { display: inline; margin: 0 5px 0 0; color: var(--muted); font-size: 11px; font-weight: 800; }
+    .calendar-meta-primary:nth-child(3) strong { color: var(--green); font-size: 12px; }
+    .calendar-meta-primary:nth-child(3) { color: var(--ink); font-weight: 800; }
+    .calendar-meta-secondary-row { padding-top: 10px; }
+    .calendar-detail-why { margin-top: 20px; padding: 16px 18px; border-radius: 10px; background: #f1f7f1; }
+    .calendar-detail-why-heading { display: flex; justify-content: space-between; gap: 12px; color: var(--green); font-size: 13px; font-weight: 800; }
+    .calendar-detail-why-heading em { color: var(--muted); font-size: 11px; font-style: normal; }
+    .calendar-detail-why-copy, .calendar-detail-description { margin-top: 8px; color: #4f5c54; font-size: 14px; line-height: 1.72; }
+    .calendar-detail-columns { display: grid; grid-template-columns: 1.2fr .8fr; gap: 14px; margin-top: 16px; }
+    .calendar-detail-section { padding: 15px 16px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+    .calendar-detail-section:first-child { border-color: #b9d8c1; background: #f1f7f1; }
+    .calendar-detail-section h4 { margin: 0 0 8px; color: var(--green); font-size: 12px; }
+    .calendar-detail-section:first-child h4 { font-size: 14px; }
+    .calendar-detail-section ul { margin: 0; padding-left: 18px; color: #4f5c54; font-size: 13px; line-height: 1.65; }
+    .calendar-detail-section:first-child li:first-child { color: var(--ink); font-weight: 800; }
+    .calendar-detail-link { display: inline-block; margin-top: 17px; color: var(--green); font-size: 13px; font-weight: 800; text-decoration: none; }
+    .settings-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 30px; align-items: start; }
+    .settings-nav { position: sticky; top: 104px; display: grid; gap: 5px; padding: 10px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
+    .settings-nav button { display: flex; justify-content: space-between; min-height: 48px; border: 0; border-radius: 8px; padding: 0 13px; color: var(--muted); background: transparent; text-align: left; }
+    .settings-nav button:hover, .settings-nav button.active { color: var(--ink); background: var(--green-soft); }
+    .settings-nav small { opacity: .55; }
+    .settings-panel { display: none; }
+    .settings-panel.active { display: block; }
+    .settings-title { display: flex; justify-content: space-between; align-items: start; gap: 20px; margin-bottom: 22px; }
+    .settings-title h2 { font-size: 35px; letter-spacing: -.05em; }
+    .settings-title p { max-width: 430px; margin-top: 9px; color: var(--muted); line-height: 1.6; }
+    .status { padding: 8px 11px; border-radius: 999px; color: var(--green); background: var(--green-soft); font-size: 12px; font-weight: 800; white-space: nowrap; }
+    .setting-group { margin-top: 13px; padding: 21px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+    .setting-group-head { display: flex; justify-content: space-between; gap: 20px; align-items: start; margin-bottom: 18px; }
+    .setting-group h3 { font-size: 16px; }
+    .setting-group-head p { margin-top: 5px; color: var(--muted); font-size: 12px; }
+    .row { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(220px, 1fr); gap: 18px; align-items: center; padding: 14px 0; border-top: 1px solid var(--line); }
+    .row label { color: var(--ink); font-size: 14px; font-weight: 700; }
+    .row label small { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; font-weight: 400; line-height: 1.45; }
+    .control { width: 100%; min-height: 42px; border: 1px solid var(--line); border-radius: 7px; padding: 0 11px; color: var(--ink); background: #fbfdfb; }
+    .control:focus { outline: 2px solid rgba(40,118,81,.2); border-color: var(--green); }
+    .toggle { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
+    .toggle input { width: 17px; height: 17px; accent-color: var(--green); }
+    .settings-panel .setting-group + .setting-group { margin-top: 14px; }
+    .settings-panel .row-actions { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
+    .settings-panel .mini-button { min-height: 38px; border: 1px solid var(--line); border-radius: 7px; padding: 0 12px; color: var(--ink); background: #fff; font-size: 12px; font-weight: 800; }
+    .settings-panel .mini-button.primary { border-color: var(--ink); color: #fff; background: var(--ink); }
+    .settings-panel .mini-button:hover { border-color: var(--green); color: var(--green); background: var(--green-soft); }
+    .settings-panel .mini-button.primary:hover { color: #fff; background: #2d4137; }
+    .settings-panel .fixed-rule { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; color: #44534b; font-size: 13px; }
+    .settings-panel .fixed-rule strong { color: var(--ink); }
+    .settings-panel .fixed-rule small { color: var(--muted); }
+    .settings-panel .inline-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .settings-panel .city-rules { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .settings-panel .city-rule { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+    .settings-panel .city-rule strong { font-size: 13px; }
+    .settings-panel .status-line { display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--muted); font-size: 12px; }
+    .database-editor { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #fbfdfb; }
+    .task-status { margin-top: 10px; color: var(--muted); font-size: 12px; font-weight: 700; }
+    .preview-config-list { display: grid; gap: 8px; margin-bottom: 10px; }
+    .preview-config-card { padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fbfdfb; }
+    .preview-config-card.is-disabled { opacity: .62; }
+    .preview-config-card-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+    .preview-config-card-copy { min-width: 0; }
+    .preview-config-card-copy strong, .preview-config-card-copy span { display: block; }
+    .preview-config-card-copy strong { color: var(--ink); font-size: 13px; }
+    .preview-config-card-copy span { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .preview-config-card-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: end; }
+    .preview-config-card-actions button { border: 0; color: var(--green); background: transparent; font-size: 12px; font-weight: 800; }
+    .preview-config-card-actions button:hover { text-decoration: underline; }
+    .preview-config-editor { display: grid; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+    .preview-config-editor .editor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .preview-config-editor label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; font-weight: 700; }
+    .preview-config-editor input, .preview-config-editor select { width: 100%; min-height: 36px; border: 1px solid var(--line); border-radius: 6px; padding: 0 9px; color: var(--ink); background: #fff; font-size: 12px; }
+    .preview-config-editor input:focus, .preview-config-editor select:focus { outline: 2px solid rgba(40,118,81,.2); border-color: var(--green); }
+    .preview-config-editor-actions { display: flex; gap: 7px; justify-content: end; }
+    .preview-config-editor-actions button { min-height: 34px; border: 1px solid var(--line); border-radius: 6px; padding: 0 10px; color: var(--ink); background: #fff; font-size: 12px; font-weight: 800; }
+    .preview-config-editor-actions button[type="submit"] { border-color: var(--ink); color: #fff; background: var(--ink); }
+    .preview-config-editor-actions button:hover { border-color: var(--green); color: var(--green); }
+    .preview-config-editor-actions button[type="submit"]:hover { color: #fff; background: #2d4137; }
+    .preview-config-editor-error { color: #a34535; font-size: 11px; }
+    @media (max-width: 860px) {
+      .topbar { gap: 14px; padding: 0 18px; } .brand-title { font-size: 18px; } .top-context { display: none; } .top-nav button { display: none; }
+      main { width: min(100% - 28px, 680px); padding-top: 22px; } .mast { display: block; } .mast-note { margin-top: 14px; }
+      .toolbar { grid-template-columns: 1fr auto; } .toolbar .filter:nth-of-type(n+2) { display: none; }
+      .summary-row { grid-template-columns: 1fr; } .calendar-days { grid-template-columns: repeat(2, minmax(0, 1fr)); } .calendar-day:nth-child(7n) { border-right: 1px solid var(--line); } .calendar-day:nth-child(2n) { border-right: 0; }
+      .calendar-detail-head { grid-template-columns: 58px minmax(0, 1fr); gap: 12px; } .calendar-detail-content { margin-left: 70px; } .calendar-detail-title-line { display: block; } .calendar-detail-badges { justify-content: start; margin-top: 9px; } .calendar-detail-columns, .settings-panel .inline-grid, .settings-panel .city-rules { grid-template-columns: 1fr; }
+      .settings-layout { grid-template-columns: 1fr; } .settings-nav { position: sticky; top: 72px; z-index: 10; display: flex; overflow: auto; padding: 6px; } .settings-nav button { min-width: max-content; }
+      .settings-title h2 { font-size: 29px; } .row { grid-template-columns: 1fr; gap: 9px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <button class="brand" data-view="directory"><span class="mark"></span><span>城事</span><span class="brand-title">大湾区技术活动日历</span></button>
+      <nav class="top-nav"><button class="active" data-view="directory">活动目录</button><button data-view="settings">配置工作台</button></nav>
+      <button class="top-action" data-view="settings">配置范围</button>
+    </header>
+    <main>
+      <section id="directory" class="view active"><canvas id="particleField" aria-hidden="true"></canvas><div class="toolbar"><label class="search"><span>⌕</span><input placeholder="搜索活动、主办方或技术方向" /></label><button class="filter" data-filter="全部城市">全部城市⌄</button><button class="filter" data-filter="主题筛选">主题筛选⌄</button><button class="filter" data-filter="日期范围">日期范围⌄</button></div><div class="summary-row"><div class="summary"><div><strong>13</strong><span>场活动已通过事实字段核验</span></div><div class="meta">深圳 · 广州 · 香港 · 澳门</div></div><div class="focus"><small>本周关注</small><p>Agent 工程、推理系统与机器人操作</p></div></div><div class="section-head"><h2>按日期查看</h2><span>未来 15 天 · 点击日期卡片定位详情</span></div><div class="calendar-overview"><div class="calendar-overview-head"><strong>2026 年 8 月 · 未来 15 天</strong><span>13 场 · 已核验公开来源</span></div><div class="calendar-days"><div class="calendar-day is-empty"><div class="calendar-day-header"><span class="calendar-day-number">19</span><span>周三</span></div><div class="calendar-day-events"></div></div><div class="calendar-day"><div class="calendar-day-header"><span class="calendar-day-number">20</span><span>周四</span></div><div class="calendar-day-events"><button class="calendar-slot is-featured" data-event="agent-reliability"><span class="calendar-slot-topline"><span>19:00</span><span class="calendar-slot-rating">高含金量</span></span><span class="calendar-slot-title">深圳 AI Builder Meetup #12：Agent 可靠性</span><span class="calendar-slot-city">深圳 · 南山</span><span class="calendar-slot-kind">业界</span></button></div></div><div class="calendar-day"><div class="calendar-day-header"><span class="calendar-day-number">21</span><span>周五</span></div><div class="calendar-day-events"><button class="calendar-slot is-featured" data-event="claude-code-mcp"><span class="calendar-slot-topline"><span>19:30</span><span class="calendar-slot-rating">高含金量</span></span><span class="calendar-slot-title">Claude Code × MCP 工程实践夜</span><span class="calendar-slot-city">深圳 · 福田</span><span class="calendar-slot-kind">业界</span></button></div></div><div class="calendar-day"><div class="calendar-day-header"><span class="calendar-day-number">22</span><span>周六</span></div><div class="calendar-day-events"><button class="calendar-slot is-featured" data-event="hk-open-source-ai"><span class="calendar-slot-topline"><span>18:45</span><span class="calendar-slot-rating">高含金量</span></span><span class="calendar-slot-title">Hong Kong Open Source AI Gathering</span><span class="calendar-slot-city">香港 · 九龙塘</span><span class="calendar-slot-kind">开源</span></button></div></div><div class="calendar-day"><div class="calendar-day-header"><span class="calendar-day-number">23</span><span>周日</span></div><div class="calendar-day-events"><button class="calendar-slot is-featured" data-event="embodied-ai-forum"><span class="calendar-slot-topline"><span>13:30</span><span class="calendar-slot-rating">高含金量</span></span><span class="calendar-slot-title">具身智能与机器人操作前沿论坛</span><span class="calendar-slot-city">广州 · 番禺</span><span class="calendar-slot-kind">学术</span></button></div></div><div class="calendar-day"><div class="calendar-day-header"><span class="calendar-day-number">24</span><span>周一</span></div><div class="calendar-day-events"><button class="calendar-slot" data-event="vector-database"><span class="calendar-slot-topline"><span>14:00</span><span class="calendar-slot-rating">中高含金量</span></span><span class="calendar-slot-title">数据库内核与向量检索 Meetup</span><span class="calendar-slot-city">深圳 · 宝安</span><span class="calendar-slot-kind">业界</span></button></div></div><div class="calendar-day"><div class="calendar-day-header"><span class="calendar-day-number">25</span><span>周二</span></div><div class="calendar-day-events"><button class="calendar-slot" data-event="web-performance-lab"><span class="calendar-slot-topline"><span>19:00</span><span class="calendar-slot-rating">中高含金量</span></span><span class="calendar-slot-title">Web 性能实验室：从 Core Web Vitals 到边缘渲染</span><span class="calendar-slot-city">深圳 · 南山</span><span class="calendar-slot-kind">业界</span></button></div></div><div class="calendar-day"><div class="calendar-day-header"><span class="calendar-day-number">26</span><span>周三</span></div><div class="calendar-day-events"><button class="calendar-slot" data-event="rust-async-night"><span class="calendar-slot-topline"><span>19:30</span><span class="calendar-slot-rating">中高含金量</span></span><span class="calendar-slot-title">Rust Async Night：Tokio 服务的并发边界</span><span class="calendar-slot-city">深圳 · 福田</span><span class="calendar-slot-kind">开源</span></button></div></div><div class="calendar-day"><div class="calendar-day-header"><span class="calendar-day-number">27</span><span>周四</span></div><div class="calendar-day-events"><button class="calendar-slot is-featured" data-event="mlsys-reading-group"><span class="calendar-slot-topline"><span>19:00</span><span class="calendar-slot-rating">高含金量</span></span><span class="calendar-slot-title">MLSys 论文精读：推理系统的 KV Cache 管理</span><span class="calendar-slot-city">广州 · 天河</span><span class="calendar-slot-kind">学术</span></button></div></div><div class="calendar-day"><div class="calendar-day-header"><span class="calendar-day-number">28</span><span>周五</span></div><div class="calendar-day-events"><button class="calendar-slot is-featured" data-event="agent-product-engineering"><span class="calendar-slot-topline"><span>19:30</span><span class="calendar-slot-rating">高含金量</span></span><span class="calendar-slot-title">Agent 产品工程：从 Demo 到可维护工作流</span><span class="calendar-slot-city">深圳 · 南山</span><span class="calendar-slot-kind">业界</span></button></div></div><div class="calendar-day"><div class="calendar-day-header"><span class="calendar-day-number">29</span><span>周六</span></div><div class="calendar-day-events"><button class="calendar-slot is-featured" data-event="otel-observability-lab"><span class="calendar-slot-topline"><span>18:45</span><span class="calendar-slot-rating">高含金量</span></span><span class="calendar-slot-title">OpenTelemetry 可观测性实战：从 Trace 到告警</span><span class="calendar-slot-city">深圳 · 福田</span><span class="calendar-slot-kind">业界</span></button><button class="calendar-slot is-featured" data-event="hk-llm-systems"><span class="calendar-slot-topline"><span>19:00</span><span class="calendar-slot-rating">高含金量</span></span><span class="calendar-slot-title">Hong Kong LLM Systems Evening</span><span class="calendar-slot-city">香港 · 中环</span><span class="calendar-slot-kind">开源</span></button></div></div><div class="calendar-day"><div class="calendar-day-header"><span class="calendar-day-number">30</span><span>周日</span></div><div class="calendar-day-events"><button class="calendar-slot is-featured" data-event="llm-security-redteam"><span class="calendar-slot-topline"><span>14:00</span><span class="calendar-slot-rating">高含金量</span></span><span class="calendar-slot-title">LLM 应用安全工作坊：Prompt Injection 与红队测试</span><span class="calendar-slot-city">深圳 · 南山</span><span class="calendar-slot-kind">学术</span></button></div></div><div class="calendar-day"><div class="calendar-day-header"><span class="calendar-day-number">31</span><span>周一</span></div><div class="calendar-day-events"><button class="calendar-slot is-featured" data-event="gpu-inference-engineering"><span class="calendar-slot-topline"><span>14:00</span><span class="calendar-slot-rating">高含金量</span></span><span class="calendar-slot-title">GPU 推理工程实践：吞吐、显存与成本的取舍</span><span class="calendar-slot-city">深圳 · 南山</span><span class="calendar-slot-kind">业界</span></button></div></div><div class="calendar-day is-empty"><div class="calendar-day-header"><span class="calendar-day-number">01</span><span>周二</span></div><div class="calendar-day-events"></div></div><div class="calendar-day is-empty"><div class="calendar-day-header"><span class="calendar-day-number">02</span><span>周三</span></div><div class="calendar-day-events"></div></div></div></div><section class="calendar-details"><div class="calendar-details-heading"><h2>活动详情</h2><span>主办方、地点、活动摘要、收获和提前准备</span></div><article class="calendar-detail" id="detail-agent-reliability"><div class="calendar-detail-head"><div class="calendar-detail-date"><strong>19</strong><span class="calendar-detail-month">AUG</span><span class="calendar-detail-weekday">周三</span></div><div><div class="calendar-detail-title-line"><h3 class="calendar-detail-title">深圳 AI Builder Meetup #12：Agent 可靠性</h3><span class="calendar-detail-badges"><span class="calendar-domain-tag">AI</span><span class="calendar-rating is-featured">高含金量</span></span></div><span class="calendar-detail-type">19:00 — 21:30 · 业界</span></div></div><div class="calendar-detail-content"><div class="calendar-detail-meta"><div class="calendar-meta-primary-row"><span class="calendar-meta-primary"><strong>主办方</strong>深圳 AI Builders Club</span><span class="calendar-meta-primary"><strong>地点</strong>深圳 · 南山 · 深圳湾科技生态园</span><span class="calendar-meta-primary"><strong>通勤时长</strong>从深大站约 24 分钟</span></div><div class="calendar-meta-secondary-row"><span class="calendar-meta-secondary"><strong>社区</strong>AI Builder Shenzhen</span><span class="calendar-meta-secondary"><strong>方向</strong>Agent / 评测 / 可观测性</span><span class="calendar-meta-secondary"><strong>来源</strong>Luma</span></div></div><section class="calendar-detail-why"><div class="calendar-detail-why-heading"><span>活动摘要</span><em>推荐</em></div><p class="calendar-detail-why-copy">这不是泛泛介绍 Agent 概念的分享，而是把评测、工具调用失败和线上可观测性放到生产环境里一起看。对正在做 Agent 应用或平台的人，现场的故障案例能帮助你判断问题到底出在模型、工具链，还是回归流程没有建立起来。</p><p class="calendar-detail-description">围绕生产环境中的 Agent 评测、工具调用失败恢复与可观测性展开。三位分享者分别来自 AI 应用团队、基础设施团队与开源评测项目，议程包含真实故障案例。</p></section><div class="calendar-detail-columns"><section class="calendar-detail-section"><h4>你会收获什么</h4><ul><li>Agent 评测的常见指标与测试集设计</li><li>工具调用失败的恢复策略</li><li>如何建立线上可观测性与回归流程</li></ul></section><section class="calendar-detail-section"><h4>提前准备</h4><ul><li>了解 LLM API、function calling 和基本 Prompt</li><li>能读懂 Python 或 TypeScript 示例</li><li>提前看过一个 Agent 框架的基本结构</li></ul></section></div><a class="calendar-detail-link" href="https://lu.ma/" target="_blank" rel="noreferrer">打开原文与报名 ↗</a></div></article>
+<article class="calendar-detail" id="detail-claude-code-mcp"><div class="calendar-detail-head"><div class="calendar-detail-date"><strong>20</strong><span class="calendar-detail-month">AUG</span><span class="calendar-detail-weekday">周四</span></div><div><div class="calendar-detail-title-line"><h3 class="calendar-detail-title">Claude Code × MCP 工程实践夜</h3><span class="calendar-detail-badges"><span class="calendar-domain-tag">工程</span><span class="calendar-rating is-featured">高含金量</span></span></div><span class="calendar-detail-type">19:30 — 21:30 · 业界</span></div></div><div class="calendar-detail-content"><div class="calendar-detail-meta"><div class="calendar-meta-primary-row"><span class="calendar-meta-primary"><strong>主办方</strong>DevTools Shenzhen 主办组</span><span class="calendar-meta-primary"><strong>地点</strong>深圳 · 福田 · 深业上城 CEEC</span><span class="calendar-meta-primary"><strong>通勤时长</strong>从深大站约 38 分钟</span></div><div class="calendar-meta-secondary-row"><span class="calendar-meta-secondary"><strong>社区</strong>DevTools Shenzhen</span><span class="calendar-meta-secondary"><strong>方向</strong>AI Coding / MCP / 工程流程</span><span class="calendar-meta-secondary"><strong>来源</strong>开发者社区</span></div></div><section class="calendar-detail-why"><div class="calendar-detail-why-heading"><span>活动摘要</span><em>推荐</em></div><p class="calendar-detail-why-copy">它的价值不在于再演示一次 AI Coding，而在于把项目指令、MCP 工具和代码 Review 串成一条团队可以复用的工程流程。已经在使用 AI Coding 的工程师，可以带着自己的项目来对照，直接判断哪些权限边界和检查步骤还缺着。</p><p class="calendar-detail-description">面向已经在团队中使用 AI Coding 的工程师，演示如何组织项目指令、接入 MCP 工具并建立可复现的代码审查流程。现场保留 40 分钟动手环节。</p></section><div class="calendar-detail-columns"><section class="calendar-detail-section"><h4>你会收获什么</h4><ul><li>如何拆分项目级指令与个人偏好</li><li>MCP 工具的权限和上下文边界</li><li>AI 生成代码进入 Review 前的检查清单</li></ul></section><section class="calendar-detail-section"><h4>提前准备</h4><ul><li>熟悉 Git 分支、Pull Request 和代码 Review</li><li>了解 REST API 或 MCP 的基本概念</li><li>准备一个可以现场演示的小项目</li></ul></section></div><a class="calendar-detail-link" href="https://lu.ma/" target="_blank" rel="noreferrer">打开原文与报名 ↗</a></div></article>
+<article class="calendar-detail" id="detail-hk-open-source-ai"><div class="calendar-detail-head"><div class="calendar-detail-date"><strong>21</strong><span class="calendar-detail-month">AUG</span><span class="calendar-detail-weekday">周五</span></div><div><div class="calendar-detail-title-line"><h3 class="calendar-detail-title">Hong Kong Open Source AI Gathering</h3><span class="calendar-detail-badges"><span class="calendar-domain-tag">开源</span><span class="calendar-rating is-featured">高含金量</span></span></div><span class="calendar-detail-type">18:45 — 21:00 · 开源</span></div></div><div class="calendar-detail-content"><div class="calendar-detail-meta"><div class="calendar-meta-primary-row"><span class="calendar-meta-primary"><strong>主办方</strong>Open Source Hong Kong</span><span class="calendar-meta-primary"><strong>地点</strong>香港 · 九龙塘 · InnoCentre</span><span class="calendar-meta-primary"><strong>通勤时长</strong>从深大站约 78 分钟</span></div><div class="calendar-meta-secondary-row"><span class="calendar-meta-secondary"><strong>社区</strong>Open Source HK</span><span class="calendar-meta-secondary"><strong>方向</strong>开源模型 / 推理 / 隐私计算</span><span class="calendar-meta-secondary"><strong>来源</strong>Meetup</span></div></div><section class="calendar-detail-why"><div class="calendar-detail-why-heading"><span>活动摘要</span><em>推荐</em></div><p class="calendar-detail-why-copy">活动把本地模型推理、开源 Agent 框架和隐私计算放在同一张技术地图里，重点是项目和基础设施的真实取舍，而不是行业趋势宣讲。它也提供了认识香港开源社区维护者的场景，但前提是你能跟上英语或粤语技术分享。</p><p class="calendar-detail-description">本期聚焦本地模型推理、开源 Agent 框架与隐私计算。活动使用英语和粤语，包含三个短分享及开源项目现场演示，适合能够阅读英文技术资料的开发者。</p></section><div class="calendar-detail-columns"><section class="calendar-detail-section"><h4>你会收获什么</h4><ul><li>香港本地开源 AI 项目的技术路线</li><li>推理服务的成本与性能取舍</li><li>隐私计算和开源模型结合的真实案例</li></ul></section><section class="calendar-detail-section"><h4>提前准备</h4><ul><li>能阅读英文技术分享</li><li>了解 Transformer 推理或模型部署基本术语</li><li>准备一个想认识的开源项目或维护者</li></ul></section></div><a class="calendar-detail-link" href="https://www.meetup.com/" target="_blank" rel="noreferrer">打开原文与报名 ↗</a></div></article>
+<article class="calendar-detail" id="detail-embodied-ai-forum"><div class="calendar-detail-head"><div class="calendar-detail-date"><strong>22</strong><span class="calendar-detail-month">AUG</span><span class="calendar-detail-weekday">周六</span></div><div><div class="calendar-detail-title-line"><h3 class="calendar-detail-title">具身智能与机器人操作前沿论坛</h3><span class="calendar-detail-badges"><span class="calendar-domain-tag">学术</span><span class="calendar-rating is-featured">高含金量</span></span></div><span class="calendar-detail-type">13:30 — 17:20 · 学术</span></div></div><div class="calendar-detail-content"><div class="calendar-detail-meta"><div class="calendar-meta-primary-row"><span class="calendar-meta-primary"><strong>主办方</strong>粤港澳智能机器人联合实验室</span><span class="calendar-meta-primary"><strong>地点</strong>广州 · 番禺 · 广州大学城</span><span class="calendar-meta-primary"><strong>通勤时长</strong>从深大站约 112 分钟</span></div><div class="calendar-meta-secondary-row"><span class="calendar-meta-secondary"><strong>社区</strong>高校 AI 与机器人研究社区</span><span class="calendar-meta-secondary"><strong>方向</strong>VLA / 机器人操作 / Sim-to-Real</span><span class="calendar-meta-secondary"><strong>来源</strong>高校 AI 学院</span></div></div><section class="calendar-detail-why"><div class="calendar-detail-why-heading"><span>活动摘要</span><em>推荐</em></div><p class="calendar-detail-why-copy">这场论坛同时覆盖视觉语言动作模型、机器人操作数据和 sim-to-real，适合想把研究论文和实验系统放在一起理解的人。相比只看模型效果的演示，你能更清楚地看到数据采集、评测和真实环境迁移分别卡在哪里。</p><p class="calendar-detail-description">议题覆盖视觉语言动作模型、机器人操作数据采集与 sim-to-real。公开议程包含论文工作解读和实验系统演示，非商业路演。</p></section><div class="calendar-detail-columns"><section class="calendar-detail-section"><h4>你会收获什么</h4><ul><li>视觉语言动作模型的训练与评测框架</li><li>机器人操作数据如何从仿真迁移到真实环境</li><li>当前具身智能研究的主要瓶颈</li></ul></section><section class="calendar-detail-section"><h4>提前准备</h4><ul><li>了解深度学习、计算机视觉和强化学习基础</li><li>知道 Transformer 和多模态模型的大致结构</li><li>提前浏览议程中的论文标题</li></ul></section></div><a class="calendar-detail-link" href="https://www.example.edu.cn/" target="_blank" rel="noreferrer">打开原文与报名 ↗</a></div></article>
+<article class="calendar-detail" id="detail-vector-database"><div class="calendar-detail-head"><div class="calendar-detail-date"><strong>23</strong><span class="calendar-detail-month">AUG</span><span class="calendar-detail-weekday">周日</span></div><div><div class="calendar-detail-title-line"><h3 class="calendar-detail-title">数据库内核与向量检索 Meetup</h3><span class="calendar-detail-badges"><span class="calendar-domain-tag">工程</span><span class="calendar-rating">中高含金量</span></span></div><span class="calendar-detail-type">14:00 — 17:00 · 业界</span></div></div><div class="calendar-detail-content"><div class="calendar-detail-meta"><div class="calendar-meta-primary-row"><span class="calendar-meta-primary"><strong>主办方</strong>Database Meetup GBA 组织组</span><span class="calendar-meta-primary"><strong>地点</strong>深圳 · 宝安 · 前海科兴科学园</span><span class="calendar-meta-primary"><strong>通勤时长</strong>从深大站约 46 分钟</span></div><div class="calendar-meta-secondary-row"><span class="calendar-meta-secondary"><strong>社区</strong>Database Meetup GBA</span><span class="calendar-meta-secondary"><strong>方向</strong>数据库内核 / 搜索 / RAG 基础设施</span><span class="calendar-meta-secondary"><strong>来源</strong>开源社区</span></div></div><section class="calendar-detail-why"><div class="calendar-detail-why-heading"><span>活动摘要</span><em>信息整理</em></div><p class="calendar-detail-why-copy">它刻意绕开产品采购和趋势话题，直接讨论向量索引、查询计划和混合检索怎样落到数据库实现上。对做搜索、数据库或 RAG 基础设施的人，这些内容更接近容量、召回和延迟之间的实际工程取舍。</p><p class="calendar-detail-description">从索引结构、查询优化和混合检索三个层面讨论向量数据库实现，不覆盖产品采购和行业趋势。适合数据库、搜索与 RAG 基础设施方向工程师。</p></section><div class="calendar-detail-columns"><section class="calendar-detail-section"><h4>你会收获什么</h4><ul><li>向量索引与传统倒排索引的组合方式</li><li>混合检索的查询计划和召回评估</li><li>RAG 基础设施的容量与延迟问题</li></ul></section><section class="calendar-detail-section"><h4>提前准备</h4><ul><li>了解 SQL、索引和基本查询优化</li><li>知道 Embedding、Top-K 和召回率含义</li><li>有数据库或搜索系统实践更容易跟上</li></ul></section></div><a class="calendar-detail-link" href="https://github.com/" target="_blank" rel="noreferrer">打开原文与报名 ↗</a></div></article>
+<article class="calendar-detail" id="detail-web-performance-lab"><div class="calendar-detail-head"><div class="calendar-detail-date"><strong>24</strong><span class="calendar-detail-month">AUG</span><span class="calendar-detail-weekday">周一</span></div><div><div class="calendar-detail-title-line"><h3 class="calendar-detail-title">Web 性能实验室：从 Core Web Vitals 到边缘渲染</h3><span class="calendar-detail-badges"><span class="calendar-domain-tag">工程</span><span class="calendar-rating">中高含金量</span></span></div><span class="calendar-detail-type">19:00 — 21:00 · 业界</span></div></div><div class="calendar-detail-content"><div class="calendar-detail-meta"><div class="calendar-meta-primary-row"><span class="calendar-meta-primary"><strong>主办方</strong>Web Performance Shenzhen</span><span class="calendar-meta-primary"><strong>地点</strong>深圳 · 南山 · 腾讯科兴科学园 2 号楼</span><span class="calendar-meta-primary"><strong>通勤时长</strong>从深大站约 18 分钟</span></div><div class="calendar-meta-secondary-row"><span class="calendar-meta-secondary"><strong>社区</strong>Web Performance Shenzhen</span><span class="calendar-meta-secondary"><strong>方向</strong>Core Web Vitals / Edge / 前端工程</span><span class="calendar-meta-secondary"><strong>来源</strong>开发者社区</span></div></div><section class="calendar-detail-why"><div class="calendar-detail-why-heading"><span>活动摘要</span><em>信息整理</em></div><p class="calendar-detail-why-copy">这场活动不是罗列性能名词，而是用线上监控数据把浏览器渲染、网络分发和发布流程串起来复盘。适合想把前端优化从经验判断变成可度量流程的人，尤其能带走一套性能预算和 CI 接入的思路。</p><p class="calendar-detail-description">从浏览器渲染、网络分发到发布流程，结合线上监控数据复盘一组真实性能问题。活动包含 30 分钟案例拆解和一段可复用的性能预算配置演示。</p></section><div class="calendar-detail-columns"><section class="calendar-detail-section"><h4>你会收获什么</h4><ul><li>LCP、INP 和 CLS 的定位路径</li><li>边缘渲染与缓存策略的取舍</li><li>如何把性能预算接入 CI 和发布流程</li></ul></section><section class="calendar-detail-section"><h4>提前准备</h4><ul><li>了解浏览器渲染和网络请求基础</li><li>能阅读 JavaScript 或 TypeScript 代码</li><li>准备一个自己遇到过的性能问题</li></ul></section></div><a class="calendar-detail-link" href="https://lu.ma/" target="_blank" rel="noreferrer">打开原文与报名 ↗</a></div></article>
+<article class="calendar-detail" id="detail-rust-async-night"><div class="calendar-detail-head"><div class="calendar-detail-date"><strong>25</strong><span class="calendar-detail-month">AUG</span><span class="calendar-detail-weekday">周二</span></div><div><div class="calendar-detail-title-line"><h3 class="calendar-detail-title">Rust Async Night：Tokio 服务的并发边界</h3><span class="calendar-detail-badges"><span class="calendar-domain-tag">开源</span><span class="calendar-rating">中高含金量</span></span></div><span class="calendar-detail-type">19:30 — 21:30 · 开源</span></div></div><div class="calendar-detail-content"><div class="calendar-detail-meta"><div class="calendar-meta-primary-row"><span class="calendar-meta-primary"><strong>主办方</strong>Rust China 深圳组</span><span class="calendar-meta-primary"><strong>地点</strong>深圳 · 福田 · 开源软件园 A 座</span><span class="calendar-meta-primary"><strong>通勤时长</strong>从深大站约 36 分钟</span></div><div class="calendar-meta-secondary-row"><span class="calendar-meta-secondary"><strong>社区</strong>Rust China</span><span class="calendar-meta-secondary"><strong>方向</strong>Rust / Tokio / 高并发服务</span><span class="calendar-meta-secondary"><strong>来源</strong>开源社区</span></div></div><section class="calendar-detail-why"><div class="calendar-detail-why-heading"><span>活动摘要</span><em>信息整理</em></div><p class="calendar-detail-why-copy">活动不从 Rust 语法讲起，而是直接进入 Tokio runtime 的任务调度、取消语义、背压和故障恢复。已经写过服务端代码的人，可以把自己的并发问题带来对照，重点理解压测结果如何连接到服务恢复策略。</p><p class="calendar-detail-description">面向已经使用 Rust 构建服务的工程师，围绕 Tokio runtime 的任务调度、取消语义和背压策略展开。分享者会展示一个从压测到故障恢复的完整案例。</p></section><div class="calendar-detail-columns"><section class="calendar-detail-section"><h4>你会收获什么</h4><ul><li>Tokio task、channel 和 cancellation 的关系</li><li>背压与连接池配置对延迟的影响</li><li>如何为异步服务补充可观测性</li></ul></section><section class="calendar-detail-section"><h4>提前准备</h4><ul><li>掌握 Rust 所有权、trait 和 error handling</li><li>了解 HTTP 服务和并发模型</li><li>提前阅读 Tokio 官方 runtime 文档</li></ul></section></div><a class="calendar-detail-link" href="https://github.com/" target="_blank" rel="noreferrer">打开原文与报名 ↗</a></div></article>
+<article class="calendar-detail" id="detail-mlsys-reading-group"><div class="calendar-detail-head"><div class="calendar-detail-date"><strong>26</strong><span class="calendar-detail-month">AUG</span><span class="calendar-detail-weekday">周三</span></div><div><div class="calendar-detail-title-line"><h3 class="calendar-detail-title">MLSys 论文精读：推理系统的 KV Cache 管理</h3><span class="calendar-detail-badges"><span class="calendar-domain-tag">学术</span><span class="calendar-rating is-featured">高含金量</span></span></div><span class="calendar-detail-type">19:00 — 21:00 · 学术</span></div></div><div class="calendar-detail-content"><div class="calendar-detail-meta"><div class="calendar-meta-primary-row"><span class="calendar-meta-primary"><strong>主办方</strong>华南机器学习系统读书会</span><span class="calendar-meta-primary"><strong>地点</strong>广州 · 天河 · 华南理工大学五山校区</span><span class="calendar-meta-primary"><strong>通勤时长</strong>从深大站约 96 分钟</span></div><div class="calendar-meta-secondary-row"><span class="calendar-meta-secondary"><strong>社区</strong>MLSys South China</span><span class="calendar-meta-secondary"><strong>方向</strong>LLM 推理 / KV Cache / 系统优化</span><span class="calendar-meta-secondary"><strong>来源</strong>研究院 / 实验室</span></div></div><section class="calendar-detail-why"><div class="calendar-detail-why-heading"><span>活动摘要</span><em>推荐</em></div><p class="calendar-detail-why-copy">本期按一篇推理系统论文逐段精读，从 KV Cache 的内存布局一路讲到实验指标，核心是理解显存、吞吐和延迟为什么会互相牵制。它不提供基础课程，更适合已经接触模型服务或系统研究、希望把论文结果和生产指标对应起来的人。</p><p class="calendar-detail-description">本期选择一篇推理系统论文做逐段精读，从 KV Cache 的内存布局讲到实验指标。活动不提供基础课程，更适合有模型服务或系统研究背景的参与者。</p></section><div class="calendar-detail-columns"><section class="calendar-detail-section"><h4>你会收获什么</h4><ul><li>KV Cache 对显存和吞吐的影响</li><li>Paged Attention 的核心数据结构</li><li>论文实验如何与生产推理指标对应</li></ul></section><section class="calendar-detail-section"><h4>提前准备</h4><ul><li>了解 Transformer attention 和 batch 推理</li><li>能阅读英文论文图表</li><li>提前读论文摘要和实验设置</li></ul></section></div><a class="calendar-detail-link" href="https://arxiv.org/" target="_blank" rel="noreferrer">打开原文与报名 ↗</a></div></article>
+<article class="calendar-detail" id="detail-agent-product-engineering"><div class="calendar-detail-head"><div class="calendar-detail-date"><strong>27</strong><span class="calendar-detail-month">AUG</span><span class="calendar-detail-weekday">周四</span></div><div><div class="calendar-detail-title-line"><h3 class="calendar-detail-title">Agent 产品工程：从 Demo 到可维护工作流</h3><span class="calendar-detail-badges"><span class="calendar-domain-tag">AI</span><span class="calendar-rating is-featured">高含金量</span></span></div><span class="calendar-detail-type">19:30 — 22:00 · 业界</span></div></div><div class="calendar-detail-content"><div class="calendar-detail-meta"><div class="calendar-meta-primary-row"><span class="calendar-meta-primary"><strong>主办方</strong>Product Engineering GBA</span><span class="calendar-meta-primary"><strong>地点</strong>深圳 · 南山 · 科技园创意广场 3F</span><span class="calendar-meta-primary"><strong>通勤时长</strong>从深大站约 22 分钟</span></div><div class="calendar-meta-secondary-row"><span class="calendar-meta-secondary"><strong>社区</strong>Product Engineering GBA</span><span class="calendar-meta-secondary"><strong>方向</strong>Agent / 工作流 / 产品工程</span><span class="calendar-meta-secondary"><strong>来源</strong>Luma</span></div></div><section class="calendar-detail-why"><div class="calendar-detail-why-heading"><span>活动摘要</span><em>推荐</em></div><p class="calendar-detail-why-copy">这场分享把 Agent 从 Demo 拆成产品边界、评测闭环和线上运营三个部分，讨论的是交给真实用户之后如何持续维护。对正在把原型推向生产的团队，人工接管、失败处理和隐性运维成本会比再做一个功能演示更有参考价值。</p><p class="calendar-detail-description">活动邀请产品负责人、应用工程师和评测负责人分别分享，重点讨论 Agent 工作流的边界、失败处理和线上运营。中间安排小组拆解，不做纯概念演讲。</p></section><div class="calendar-detail-columns"><section class="calendar-detail-section"><h4>你会收获什么</h4><ul><li>任务边界、工具权限和人工接管的设计方法</li><li>从离线样本到线上反馈的评测闭环</li><li>如何识别 Agent 产品中的隐性运维成本</li></ul></section><section class="calendar-detail-section"><h4>提前准备</h4><ul><li>了解 LLM API 和 structured output</li><li>做过一个带工具调用的原型</li><li>准备一个需要人工接管的业务场景</li></ul></section></div><a class="calendar-detail-link" href="https://lu.ma/" target="_blank" rel="noreferrer">打开原文与报名 ↗</a></div></article>
+<article class="calendar-detail" id="detail-otel-observability-lab"><div class="calendar-detail-head"><div class="calendar-detail-date"><strong>28</strong><span class="calendar-detail-month">AUG</span><span class="calendar-detail-weekday">周五</span></div><div><div class="calendar-detail-title-line"><h3 class="calendar-detail-title">OpenTelemetry 可观测性实战：从 Trace 到告警</h3><span class="calendar-detail-badges"><span class="calendar-domain-tag">工程</span><span class="calendar-rating is-featured">高含金量</span></span></div><span class="calendar-detail-type">18:45 — 21:15 · 业界</span></div></div><div class="calendar-detail-content"><div class="calendar-detail-meta"><div class="calendar-meta-primary-row"><span class="calendar-meta-primary"><strong>主办方</strong>Cloud Native GBA</span><span class="calendar-meta-primary"><strong>地点</strong>深圳 · 福田 · 平安科技中心 21F</span><span class="calendar-meta-primary"><strong>通勤时长</strong>从深大站约 42 分钟</span></div><div class="calendar-meta-secondary-row"><span class="calendar-meta-secondary"><strong>社区</strong>Cloud Native GBA</span><span class="calendar-meta-secondary"><strong>方向</strong>OpenTelemetry / Trace / SRE</span><span class="calendar-meta-secondary"><strong>来源</strong>云原生社区</span></div></div><section class="calendar-detail-why"><div class="calendar-detail-why-heading"><span>活动摘要</span><em>推荐</em></div><p class="calendar-detail-why-copy">活动用一个包含 API、队列和模型服务的示例系统，完整走过 OpenTelemetry 的埋点、采集与告警配置。正在维护微服务或 AI 推理平台的人，可以借这条链路检查自己的 Trace、Metric、Log 是否真的能在一次故障里互相对上。</p><p class="calendar-detail-description">通过一个包含 API、队列和模型服务的示例系统，演示 OpenTelemetry 的埋点、采集与告警配置。参与者可以带自己的服务链路来对照排查。</p></section><div class="calendar-detail-columns"><section class="calendar-detail-section"><h4>你会收获什么</h4><ul><li>Trace、Metric、Log 的关联方式</li><li>采样策略和高基数字段的成本控制</li><li>如何从一次故障反推告警与仪表盘缺口</li></ul></section><section class="calendar-detail-section"><h4>提前准备</h4><ul><li>了解 HTTP 服务和容器部署</li><li>知道 Prometheus 或 Grafana 基本概念</li><li>准备一条希望追踪的线上请求链路</li></ul></section></div><a class="calendar-detail-link" href="https://opentelemetry.io/" target="_blank" rel="noreferrer">打开原文与报名 ↗</a></div></article>
+<article class="calendar-detail" id="detail-hk-llm-systems"><div class="calendar-detail-head"><div class="calendar-detail-date"><strong>28</strong><span class="calendar-detail-month">AUG</span><span class="calendar-detail-weekday">周五</span></div><div><div class="calendar-detail-title-line"><h3 class="calendar-detail-title">Hong Kong LLM Systems Evening</h3><span class="calendar-detail-badges"><span class="calendar-domain-tag">开源</span><span class="calendar-rating is-featured">高含金量</span></span></div><span class="calendar-detail-type">19:00 — 21:30 · 开源</span></div></div><div class="calendar-detail-content"><div class="calendar-detail-meta"><div class="calendar-meta-primary-row"><span class="calendar-meta-primary"><strong>主办方</strong>Hong Kong AI Systems Community</span><span class="calendar-meta-primary"><strong>地点</strong>香港 · 中环 · Cyberport Community Hall</span><span class="calendar-meta-primary"><strong>通勤时长</strong>从深大站约 92 分钟</span></div><div class="calendar-meta-secondary-row"><span class="calendar-meta-secondary"><strong>社区</strong>HK AI Systems</span><span class="calendar-meta-secondary"><strong>方向</strong>推理服务 / 开源模型 / GPU 调度</span><span class="calendar-meta-secondary"><strong>来源</strong>Meetup</span></div></div><section class="calendar-detail-why"><div class="calendar-detail-why-heading"><span>活动摘要</span><em>推荐</em></div><p class="calendar-detail-why-copy">它关注的是开源模型部署、GPU 调度和推理框架的性能对比，适合想了解香港 AI 基础设施团队实际做法的人。活动以英文为主，价值在于把成本、吞吐、延迟和合规约束放到同一个部署问题里讨论。</p><p class="calendar-detail-description">三位来自模型平台和开源项目的分享者讨论推理服务、GPU 调度与开源模型落地，活动以英文为主，包含一段现场性能对比演示。</p></section><div class="calendar-detail-columns"><section class="calendar-detail-section"><h4>你会收获什么</h4><ul><li>模型服务的 batching 与调度策略</li><li>开源模型部署的成本和合规约束</li><li>如何比较不同推理框架的真实指标</li></ul></section><section class="calendar-detail-section"><h4>提前准备</h4><ul><li>能阅读英文技术分享</li><li>了解 GPU 显存、batch 和 latency</li><li>提前准备一个想比较的推理框架</li></ul></section></div><a class="calendar-detail-link" href="https://www.meetup.com/" target="_blank" rel="noreferrer">打开原文与报名 ↗</a></div></article>
+<article class="calendar-detail" id="detail-llm-security-redteam"><div class="calendar-detail-head"><div class="calendar-detail-date"><strong>29</strong><span class="calendar-detail-month">AUG</span><span class="calendar-detail-weekday">周六</span></div><div><div class="calendar-detail-title-line"><h3 class="calendar-detail-title">LLM 应用安全工作坊：Prompt Injection 与红队测试</h3><span class="calendar-detail-badges"><span class="calendar-domain-tag">AI</span><span class="calendar-rating is-featured">高含金量</span></span></div><span class="calendar-detail-type">14:00 — 17:30 · 学术</span></div></div><div class="calendar-detail-content"><div class="calendar-detail-meta"><div class="calendar-meta-primary-row"><span class="calendar-meta-primary"><strong>主办方</strong>粤港澳 AI 安全联合实验室</span><span class="calendar-meta-primary"><strong>地点</strong>深圳 · 南山 · 西丽大学城国际会议中心</span><span class="calendar-meta-primary"><strong>通勤时长</strong>从深大站约 34 分钟</span></div><div class="calendar-meta-secondary-row"><span class="calendar-meta-secondary"><strong>社区</strong>OWASP Shenzhen AI Security Group</span><span class="calendar-meta-secondary"><strong>方向</strong>LLM Security / Prompt Injection / Red Team</span><span class="calendar-meta-secondary"><strong>来源</strong>高校 / 安全社区</span></div></div><section class="calendar-detail-why"><div class="calendar-detail-why-heading"><span>活动摘要</span><em>推荐</em></div><p class="calendar-detail-why-copy">这场工作坊会从威胁建模开始，用可复现的 Prompt Injection、间接注入和工具越权样例检验防护效果。负责 Agent、RAG 或企业知识库安全的人，能把攻击面、红队测试集和输出过滤放进同一套回归流程，而不是只记住几个安全术语。</p><p class="calendar-detail-description">活动从威胁建模开始，现场演示 Prompt Injection、间接注入和工具越权，再用一组红队样本比较不同防护策略。更接近工程训练，不是安全概念科普。</p></section><div class="calendar-detail-columns"><section class="calendar-detail-section"><h4>你会收获什么</h4><ul><li>Prompt Injection 的常见攻击面与威胁建模</li><li>如何构建红队测试集和自动化回归</li><li>检索、工具权限与输出过滤的分层防护</li></ul></section><section class="calendar-detail-section"><h4>提前准备</h4><ul><li>了解 LLM API、RAG 或工具调用</li><li>掌握基本 Web 安全概念</li><li>自带电脑并准备一个可测试的对话应用</li></ul></section></div><a class="calendar-detail-link" href="https://owasp.org/" target="_blank" rel="noreferrer">打开原文与报名 ↗</a></div></article>
+<article class="calendar-detail" id="detail-gpu-inference-engineering"><div class="calendar-detail-head"><div class="calendar-detail-date"><strong>30</strong><span class="calendar-detail-month">AUG</span><span class="calendar-detail-weekday">周日</span></div><div><div class="calendar-detail-title-line"><h3 class="calendar-detail-title">GPU 推理工程实践：吞吐、显存与成本的取舍</h3><span class="calendar-detail-badges"><span class="calendar-domain-tag">工程</span><span class="calendar-rating is-featured">高含金量</span></span></div><span class="calendar-detail-type">14:00 — 17:00 · 业界</span></div></div><div class="calendar-detail-content"><div class="calendar-detail-meta"><div class="calendar-meta-primary-row"><span class="calendar-meta-primary"><strong>主办方</strong>AI Infrastructure Shenzhen</span><span class="calendar-meta-primary"><strong>地点</strong>深圳 · 南山 · 深圳湾科技生态园 B 座</span><span class="calendar-meta-primary"><strong>通勤时长</strong>从深大站约 26 分钟</span></div><div class="calendar-meta-secondary-row"><span class="calendar-meta-secondary"><strong>社区</strong>AI Infra GBA</span><span class="calendar-meta-secondary"><strong>方向</strong>推理服务 / GPU / 性能优化</span><span class="calendar-meta-secondary"><strong>来源</strong>Luma</span></div></div><section class="calendar-detail-why"><div class="calendar-detail-why-heading"><span>活动摘要</span><em>推荐</em></div><p class="calendar-detail-why-copy">这场活动不从模型效果开始，而是把 batching、显存占用和服务成本放在同一个推理链路里分析。对正在部署大模型或维护 GPU 服务的人，现场的压测数据能帮助你判断瓶颈到底来自模型、调度策略，还是基础设施配置。</p><p class="calendar-detail-description">围绕连续 batching、显存管理和推理服务容量规划展开，包含一组真实压测数据和部署参数对比。适合 AI 应用、模型平台和基础设施工程师。</p></section><div class="calendar-detail-columns"><section class="calendar-detail-section"><h4>你会收获什么</h4><ul><li>连续 batching 与请求调度的基本取舍</li><li>显存、吞吐和延迟之间的关系</li><li>如何把推理成本纳入服务容量规划</li></ul></section><section class="calendar-detail-section"><h4>提前准备</h4><ul><li>了解 GPU 显存、batch 和 latency 基本概念</li><li>接触过模型 API 或推理服务部署</li><li>准备一个自己遇到过的吞吐或成本问题</li></ul></section></div><a class="calendar-detail-link" href="https://lu.ma/" target="_blank" rel="noreferrer">打开原文与报名 ↗</a></div></article></section></section>
+      <section id="settings" class="view">
+        <div class="mast"><div><p class="eyebrow">配置工作台 · 规则已保存</p><h1>设置活动目录</h1></div><p class="mast-note">配置检索来源、时间、主题、展示字段和推送任务。修改会在下一次任务运行时生效。</p></div>
+        <div class="settings-layout"><nav class="settings-nav"><button class="active" data-panel="sources">来源与范围 <small>12</small></button><button data-panel="schedule">时间与城市 <small>6</small></button><button data-panel="topics">主题筛选 <small>16</small></button><button data-panel="fields">活动页字段 <small>18</small></button><button data-panel="push">推送任务 <small>3</small></button></nav><div>
+          <section class="settings-panel active" data-panel-content="sources">
+            <div class="settings-title"><div><h2>选择活动来源</h2><p>设置区域、目标人群和公开来源。只收录时间、地点和技术主题可核验的活动。</p></div><span class="status">规则有效</span></div>
+            <div class="setting-group"><div class="setting-group-head"><div><h3>基本范围</h3><p>区域和目标数量决定检索覆盖面</p></div></div>
+              <div class="row"><label>检索区域<small>用于页面标题、活动筛选和推送卡片</small></label><div class="inline-grid"><select class="control" data-preview-setting="region"><option>大湾区</option><option>深圳</option><option>广州</option><option>香港</option><option>珠海</option><option>澳门</option><option>北京</option><option>上海</option><option>杭州</option><option>成都</option><option>武汉</option><option>南京</option><option>苏州</option><option>厦门</option></select><select class="control" data-preview-setting="targetCount"><option value="10">目标数量 · 10 场</option><option value="12">目标数量 · 12 场</option><option value="15">目标数量 · 15 场</option><option value="20">目标数量 · 20 场</option></select></div></div>
+              <div class="row"><label>目标人群<small>用于判断活动是否具有实际价值</small></label><div><div id="audience-config-list" class="preview-config-list" data-config-collection="audiences"></div><button class="mini-button" type="button" data-open-config="audiences">+ 新建目标人群</button></div></div>
+            </div>
+            <div class="setting-group"><div class="setting-group-head"><div><h3>公开来源</h3><p>固定来源加可选扩展，来源越具体越容易核验</p></div></div>
+              <div class="row"><label>来源列表<small>只使用公开活动页面</small></label><div><div id="source-config-list" class="preview-config-list" data-config-collection="sources"></div><button class="mini-button" type="button" data-open-config="sources">+ 添加活动来源</button></div></div>
+              <div class="row"><label>核验条件<small>事实字段不足时禁止发布</small></label><div class="fixed-rule"><strong>标题、开始时间、时区、城市、地点、主办方、原文链接、技术主题</strong><small>公开页面可核验 · 固定规则</small></div></div>
+            </div>
+          </section>
+          <section class="settings-panel" data-panel-content="schedule">
+            <div class="settings-title"><div><h2>设置抓取时间和城市</h2><p>每天按运行时间抓取，覆盖未来 15 天；任务时间按配置时区解释，数据库统一保存 UTC。</p></div><span class="status">已保存</span></div>
+            <div class="setting-group"><div class="setting-group-head"><div><h3>时间窗口</h3><p>夏令时边界由时区规则处理</p></div></div>
+              <div class="row"><label>自动运行<small>当前自动化：线下技术活动情报晨报</small></label><div class="inline-grid"><select class="control" data-preview-setting="frequency"><option>每天</option><option>工作日</option><option>每周一</option></select><select class="control" data-preview-setting="runTime"><option>07:00 · Asia/Shanghai</option><option>08:00 · Asia/Shanghai</option><option>18:30 · Asia/Shanghai</option></select></div></div>
+              <div class="row"><label>活动日期范围<small>隐藏已经开始或结束的活动</small></label><div class="inline-grid"><select class="control" disabled><option>运行当天 00:00 · 固定</option></select><select class="control" data-preview-setting="coverageDays"><option value="15">覆盖 15 天</option><option value="30">覆盖 30 天</option><option value="60">覆盖 60 天</option></select></div></div>
+              <div class="row"><label>交通出发点<small>用于估算通勤时间和交通费用</small></label><div class="inline-grid"><input id="origin-name" class="control" data-origin-field="name" value="深大地铁站" placeholder="起点名称" /><input id="origin-address" class="control" data-origin-field="address" value="深圳市南山区深大地铁站" placeholder="具体地址" /><select id="origin-mode" class="control" data-origin-field="mode"><option>地铁 + 步行</option><option>驾车</option><option>公交 + 步行</option><option>骑行</option><option>步行</option></select><input id="origin-map-url" class="control" data-origin-field="mapUrl" value="https://www.google.com/maps/search/?api=1&query=深圳大学地铁站" placeholder="地图链接" /></div><div class="row-actions" style="margin-top:9px"><button class="mini-button" type="button" data-action="save-origin">保存交通出发点</button></div></div>
+            </div>
+            <div class="setting-group"><div class="setting-group-head"><div><h3>城市与收录门槛</h3><p>城市是固定候选，门槛可单独调整</p></div></div><div class="city-rules"><div class="city-rule"><strong>深圳</strong><select class="control" data-city-rule="深圳"><option>高 / 中含金量</option><option>仅高含金量</option><option>不收录</option></select></div><div class="city-rule"><strong>广州</strong><select class="control" data-city-rule="广州"><option>仅高含金量</option><option>高 / 中含金量</option><option>不收录</option></select></div><div class="city-rule"><strong>珠海</strong><select class="control" data-city-rule="珠海"><option>仅高含金量</option><option>高 / 中含金量</option><option>不收录</option></select></div><div class="city-rule"><strong>香港</strong><select class="control" data-city-rule="香港"><option>高含金量 · 1 小时内优先</option><option>高 / 中含金量</option><option>不收录</option></select></div><div class="city-rule"><strong>澳门</strong><select class="control" data-city-rule="澳门"><option>高含金量 · 3 小时内优先</option><option>高 / 中含金量</option><option>不收录</option></select></div></div></div>
+          </section>
+          <section class="settings-panel" data-panel-content="topics">
+            <div class="settings-title"><div><h2>设置主题筛选</h2><p>主题优先级用于检索和排序；活动数量不足时不放宽技术要求。</p></div><span class="status">16 条规则</span></div>
+            <div class="setting-group"><div class="setting-group-head"><div><h3>优先主题</h3><p>默认方向可继续添加</p></div></div>
+              <div class="row"><label>高优先级<small>出现在活动卡片和推送摘要中</small></label><div><div id="topic-config-list" class="preview-config-list" data-config-collection="topics"></div><button class="mini-button" type="button" data-open-config="topics">+ 新建优先主题</button></div></div>
+              <div class="row"><label>技术主题要求<small>用于过滤泛泛而谈的活动</small></label><div class="fixed-rule"><strong>必须包含可核验的技术主题或议程</strong><small>固定规则</small></div></div>
+            </div>
+            <div class="setting-group"><div class="setting-group-head"><div><h3>降低优先级与排序</h3><p>调整过滤偏好，不改变固定核验规则</p></div></div>
+              <div class="row"><label>弱相关内容<small>除非存在明确工程实现，否则不进入正式清单</small></label><div><div id="weak-content-config-list" class="preview-config-list" data-config-collection="weakContent"></div><button class="mini-button" type="button" data-open-config="weakContent">+ 新建降权规则</button></div></div>
+              <div class="row"><label>活动类型<small>用于活动页分类筛选和排序</small></label><div><div id="event-type-config-list" class="preview-config-list" data-config-collection="eventTypes"></div><button class="mini-button" type="button" data-open-config="eventTypes">+ 新建活动类型</button></div></div>
+              <div class="row"><label>排序依据<small>不改变事实字段发布门槛</small></label><div class="inline-grid"><select class="control" data-preview-setting="primarySort"><option value="日期与开始时间">第一排序 · 日期与开始时间</option><option value="技术相关度">第一排序 · 技术相关度</option><option value="通勤距离">第一排序 · 通勤距离</option></select><select class="control" data-preview-setting="secondarySort"><option value="技术相关度">第二排序 · 技术相关度</option><option value="日期与开始时间">第二排序 · 日期与开始时间</option><option value="通勤距离">第二排序 · 通勤距离</option></select></div></div>
+              <div class="row"><label>输出取舍<small>作用于公开活动页和推送卡片</small></label><div class="toggle"><label><input type="checkbox" data-preview-setting="preferChinese" /> 优先中文标题</label><label><input type="checkbox" data-preview-setting="hideExpired" /> 隐藏过期活动</label><label><input type="checkbox" data-preview-setting="hideUnknown" /> 隐藏未知字段</label></div></div>
+            </div>
+          </section>
+          <section class="settings-panel" data-panel-content="fields">
+            <div class="settings-title"><div><h2>选择活动页字段</h2><p>事实字段与摘要分开管理。封面图可缺省，事实字段以核验结果为准。</p></div><span class="status">已保存</span></div>
+            <div class="setting-group"><div class="setting-group-head"><div><h3>活动页字段</h3><p>8 个固定事实字段 · 10 个可选字段</p></div></div>
+              <div class="row"><label>固定事实字段<small>任一字段无法核验时禁止发布，重新抓取后再生成结果</small></label><div class="fixed-rule"><strong>活动标题 · 开始时间 · 时区 · 城市 · 地点 · 主办方 · 原文链接 · 技术主题</strong><small>固定 · 发布门槛</small></div></div>
+              <div class="row"><label>可选字段<small>按开关控制，不生成未知占位内容</small></label><div class="toggle"><label><input type="checkbox" data-preview-setting="showCommunity" /> 社区</label><label><input type="checkbox" data-preview-setting="showTopic" /> 技术方向</label><label><input type="checkbox" data-preview-setting="showSource" /> 来源</label><label><input type="checkbox" data-preview-setting="showWhy" /> 推荐依据</label></div></div>
+              <div class="row"><label>实用信息<small>用于判断是否参加</small></label><div class="toggle"><label><input type="checkbox" data-preview-setting="showTravel" /> 通勤估算</label><label><input type="checkbox" data-preview-setting="showCost" /> 费用</label><label><input type="checkbox" data-preview-setting="showSourceLink" /> 原文链接</label><label><input type="checkbox" data-preview-setting="showTakeaways" /> 你会收获什么</label><label><input type="checkbox" data-preview-setting="showPrerequisites" /> 提前准备</label></div></div>
+              <div class="row"><label>封面图<small>可选增强字段，加载失败不影响发布</small></label><div class="toggle"><label><input type="checkbox" data-preview-setting="showCover" /> 显示活动封面</label><span class="status-line">没有封面时使用文本占位区域</span></div></div>
+            </div>
+            <div class="setting-group"><div class="setting-group-head"><div><h3>摘要与时间格式</h3><p>影响活动页和推送卡片</p></div></div>
+              <div class="row"><label>摘要长度<small>活动事实与摘要分开保存</small></label><div class="inline-grid"><select class="control" data-preview-setting="summaryLength"><option>活动页摘要 · 完整摘录（2—3 句）</option><option>活动页摘要 · 标准摘要（1—2 句）</option><option>活动页摘要 · 只显示一句</option></select><select class="control" data-preview-setting="pushStyle"><option>推送卡片 · 包含关键内容</option><option>推送卡片 · 只含标题和时间</option><option>推送卡片 · 只含高含金量活动</option></select></div></div>
+              <div class="row"><label>时间显示<small>统一使用助手配置的时区</small></label><div class="inline-grid"><select class="control" data-preview-setting="timeFormat"><option>24 小时制</option><option>12 小时制</option></select><select class="control" data-preview-setting="timezone"><option>Asia/Shanghai（UTC+8）</option><option>跟随活动地点</option></select></div></div>
+              <div class="row"><label>缺失字段<small>不使用“暂无”等空占位文本</small></label><div class="toggle"><label><input type="checkbox" data-preview-setting="hideUnknown" /> 自动隐藏未知值</label></div></div>
+            </div>
+          </section>
+          <section class="settings-panel" data-panel-content="push">
+            <div class="settings-title"><div><h2>设置推送任务</h2><p>设置推送通道、发送时间和自动化文件。密钥只保存在本机私密配置中。</p></div><span class="status">1 个通道可用</span></div>
+            <div class="setting-group"><div class="setting-group-head"><div><h3>推送通道</h3><p>可测试、停用和清除本机密钥</p></div></div>
+              <div class="row"><label>通道配置<small>飞书、ServerChan 等通道使用私密配置</small></label><div><div id="channel-config-list" class="preview-config-list" data-config-collection="channels"></div><div class="row-actions"><button class="mini-button" type="button" data-open-config="channels">+ 添加推送通道</button><button class="mini-button" type="button" data-action="test-channel">测试推送通道</button><button class="mini-button" type="button" data-action="clear-secret">清除密钥</button></div></div></div>
+            </div>
+            <div class="setting-group"><div class="setting-group-head"><div><h3>自动化状态</h3><p>操作使用统一异步状态：请求已提交、任务排队中、执行中、执行成功、执行失败</p></div></div>
+              <div class="row"><label>每日推送<small>推送已核验的活动摘要</small></label><div class="toggle"><label><input type="checkbox" data-preview-setting="pushEnabled" /> 已启用</label><select class="control" data-preview-setting="pushTime"><option>每天 08:30 · Asia/Shanghai</option><option>每天 18:30 · Asia/Shanghai</option><option>每天 07:00 · Asia/Shanghai</option></select></div></div>
+              <div class="row"><label>自动化文件<small>生成后由调度器读取，可修改名称与 Prompt 文件名</small></label><div class="inline-grid"><input class="control" data-preview-setting="automationName" placeholder="自动化名称" /><input class="control" data-preview-setting="promptFile" placeholder="Prompt 文件名" /></div></div>
+              <div class="row"><label>最近更新<small>用于确认当前工作台配置已写入本地状态</small></label><div class="fixed-rule"><strong id="automationUpdated">2026-09-20 12:26</strong><small>本地预览状态</small></div></div>
+              <div class="row"><label>数据库连接<small>仅显示连接状态，不展示敏感值</small></label><div><div class="row-actions"><span class="status" id="databaseStatus">已连接 · UTC 保存</span><button class="mini-button" type="button" data-action="edit-database">修改数据库连接</button></div><div id="databaseEditor" class="database-editor" hidden><div class="inline-grid"><input class="control" data-database-field="host" placeholder="主机地址" /><input class="control" data-database-field="port" placeholder="端口" /><input class="control" data-database-field="database" placeholder="数据库名" /><input class="control" data-database-field="user" placeholder="用户名" /></div><div class="row-actions" style="margin-top:9px"><button class="mini-button" type="button" data-action="save-database">保存数据库连接</button><button class="mini-button" type="button" data-action="cancel-database">取消</button></div></div></div></div>
+              <div class="row"><label>任务操作<small>所有操作写入统一任务状态</small></label><div><div class="row-actions"><button class="mini-button" type="button" data-action="run-task">立即运行任务</button><button class="mini-button" type="button" data-action="preflight">本地预检</button><button class="mini-button primary" type="button" data-action="generate-automation">生成自动化文件</button></div><div id="previewTaskStatus" class="task-status" role="status" aria-live="polite">执行成功 · 配置已加载</div></div></div>
+            </div>
+          </section>
+        </div></div>
+      </section>
+    </main>
+  </div>
+  <script>
+    const previewConfigKey = 'cityactivi-preview-config-v1';
+    const previewConfigDefaults = {
+      audiences: [
+        { id: 'aud-ai', name: 'AI 工程师', keywords: 'Agent, LLM, 推理, 大模型, 多模态, 具身智能, 机器人, VLA, AI Coding', priority: '高', enabled: true },
+        { id: 'aud-devtools', name: '开发者工具与基础设施', keywords: 'MCP, DevTools, 开源, GPU, 云原生, 数据库, 推理服务', priority: '高', enabled: true },
+        { id: 'aud-research', name: '高校科研与研究生', keywords: '论文, 实验, 研究, 学术, 实验室, 计算机视觉, 机器学习', priority: '中', enabled: true },
+        { id: 'aud-embodied', name: '具身智能与机器人', keywords: '具身智能, 机器人, Robotics, VLA, 视觉语言动作, 运动控制', priority: '高', enabled: true }
+      ],
+      sources: [
+        { id: 'src-luma', name: 'Luma', url: 'https://lu.ma/', kind: '活动平台', cities: '大湾区', priority: '高', enabled: true },
+        { id: 'src-meetup', name: 'Meetup', url: 'https://www.meetup.com/', kind: '活动平台', cities: '香港, 深圳', priority: '高', enabled: true },
+        { id: 'src-gdg-shenzhen', name: 'GDG Shenzhen', url: 'https://gdg.community.dev/gdg-shenzhen/', kind: '开发者社区', cities: '深圳', priority: '高', enabled: true },
+        { id: 'src-gosim', name: 'GOSIM Shenzhen', url: 'https://shenzhen2026.gosim.org/zh/', kind: 'AI / 具身 / 开源大会', cities: '深圳', priority: '高', enabled: true },
+        { id: 'src-gosim-schedule', name: 'GOSIM Shenzhen 议程详情', url: 'https://shenzhen2026.gosim.org/zh/schedule/', kind: 'AI / 具身 / 开源议程', cities: '深圳', priority: '高', enabled: true },
+        { id: 'src-open', name: 'openGauss 开源社区', url: 'https://opengauss.org/zh/events/', kind: '开源社区', cities: '大湾区', priority: '高', enabled: true },
+        { id: 'src-airs', name: 'AIRS 人工智能与机器人研究院', url: 'https://airs.cuhk.edu.cn/en/events', kind: '高校 / 研究院', cities: '深圳', priority: '高', enabled: true },
+        { id: 'src-szu-library', name: '深圳大学图书馆活动与讲座', url: 'https://www.lib.szu.edu.cn/events', kind: '高校 / 图书馆', cities: '深圳', priority: '中', enabled: true },
+        { id: 'src-sustech', name: '南方科技大学学术讲座', url: 'https://www.sustech.edu.cn/zh/events-142.html', kind: '高校 / 学术', cities: '深圳', priority: '中', enabled: true },
+        { id: 'src-cuhk-sz', name: '香港中文大学（深圳）活动搜索', url: 'https://www.cuhk.edu.cn/en/event-search', kind: '高校 / 学术', cities: '深圳', priority: '中', enabled: true },
+        { id: 'src-shenzhen-public', name: '深圳公共文化活动', url: 'https://wtl.sz.gov.cn/bsfw/mzwhhd/mzhd/index.html', kind: '公共活动', cities: '深圳', priority: '低', enabled: true },
+        { id: 'src-academic', name: '高校 / 研究院', url: 'https://arxiv.org/', kind: '学术来源', cities: '广州, 深圳', priority: '中', enabled: true },
+        { id: 'src-innovation-nanshan', name: '创新南山相关产业活动', url: 'https://nsszjj.com/', kind: '产业社区', cities: '深圳', priority: '中', enabled: false },
+        { id: 'src-szdiy', name: 'SZDIY 社区日历', url: 'https://szdiy.org/meetup', kind: '开发者社区', cities: '深圳', priority: '中', enabled: false }
+      ],
+      topics: [
+        { id: 'topic-agent', name: 'Agent / RAG', keywords: 'Agent, RAG, LLM, 智能体, 检索增强', priority: '高', enabled: true },
+        { id: 'topic-coding', name: 'AI Coding', keywords: 'AI Coding, MCP, DevTools', priority: '高', enabled: true },
+        { id: 'topic-model', name: '模型训练与推理', keywords: '推理, KV Cache, 多模态, 大模型, vLLM, 端侧推理', priority: '高', enabled: true },
+        { id: 'topic-embodied', name: '具身智能与机器人', keywords: '具身智能, VLA, 机器人, Robotics, Sim-to-Real, 视觉语言动作, 运动控制', priority: '高', enabled: true },
+        { id: 'topic-research', name: 'AI 科研与计算机视觉', keywords: '科研, 学术, 论文, 实验室, 机器学习, 深度学习, 计算机视觉, AI for Science', priority: '中', enabled: true },
+        { id: 'topic-cloud', name: '开源与 AI 基础设施', keywords: '开源, Open Source, openGauss, GPU, 云原生, 数据库, 边缘计算, Linux', priority: '中', enabled: true }
+      ],
+      weakContent: [
+        { id: 'weak-trend', name: '纯商业趋势', keywords: '趋势, 投融资, 战略', priority: '低', enabled: true },
+        { id: 'weak-product', name: '泛产品分享', keywords: '产品发布, 增长, 案例分享', priority: '低', enabled: true },
+        { id: 'weak-recruit', name: '无技术议程的招聘会', keywords: '招聘, 招聘会, 职位', priority: '低', enabled: false }
+      ],
+      eventTypes: [
+        { id: 'type-industry', name: '业界', description: '公司、工程团队和产业实践', enabled: true },
+        { id: 'type-academic', name: '学术', description: '论文、实验室和研究分享', enabled: true },
+        { id: 'type-open', name: '开源', description: '开源项目、社区和维护者', enabled: true }
+      ],
+      channels: [
+        { id: 'channel-feishu', type: '飞书', name: '飞书自定义机器人', endpoint: 'https://open.feishu.cn/open-apis/bot/v2/hook/••••', secret: '', enabled: true },
+        { id: 'channel-server', type: 'Server 酱', name: 'Server 酱', endpoint: 'https://sct.ftqq.com/sendkey', secret: '', enabled: false }
+      ],
+      settings: {
+        region: '大湾区', targetCount: '12', frequency: '每天', runTime: '07:00 · Asia/Shanghai', coverageDays: '15',
+        primarySort: '日期与开始时间', secondarySort: '技术相关度', preferChinese: true, hideExpired: true, hideUnknown: true,
+        showCommunity: true, showTopic: true, showSource: true, showWhy: true, showTravel: true, showCost: false,
+        showSourceLink: true, showCover: false, showTakeaways: true, showPrerequisites: true,
+        summaryLength: '活动页摘要 · 完整摘录（2—3 句）', pushStyle: '推送卡片 · 包含关键内容', timeFormat: '24 小时制', timezone: 'Asia/Shanghai（UTC+8）',
+        pushEnabled: true, pushTime: '每天 08:30 · Asia/Shanghai', automationName: '线下技术活动情报晨报', promptFile: 'tech-events-assistant.automation.md',
+        cityRules: { 深圳: '高 / 中含金量', 广州: '仅高含金量', 珠海: '仅高含金量', 香港: '高含金量 · 1 小时内优先', 澳门: '高含金量 · 3 小时内优先' },
+        origin: { name: '深大地铁站', address: '深圳市南山区深大地铁站', mode: '地铁 + 步行', mapUrl: 'https://www.google.com/maps/search/?api=1&query=深圳大学地铁站' },
+        database: { host: 'localhost', port: '5432', database: 'cityactivi', user: 'cityactivi' }
+      }
+    };
+    const previewConfig = (() => {
+      try {
+        const saved = JSON.parse(localStorage.getItem(previewConfigKey) || 'null');
+        return Object.fromEntries(Object.entries(previewConfigDefaults).map(([key, value]) => {
+          const stored = saved?.[key];
+          if (key === 'settings') return [key, { ...value, ...(stored || {}), cityRules: { ...value.cityRules, ...(stored?.cityRules || {}) }, origin: { ...value.origin, ...(stored?.origin || {}) }, database: { ...value.database, ...(stored?.database || {}) } }];
+          return [key, Array.isArray(stored) ? stored : value.map((item) => ({ ...item }))];
+        }));
+      } catch (error) {
+        return Object.fromEntries(Object.entries(previewConfigDefaults).map(([key, value]) => [key, key === 'settings' ? { ...value } : value.map((item) => ({ ...item }))]));
+      }
+    })();
+    const previewCollectionLabels = { audiences: '目标人群', sources: '活动来源', topics: '优先主题', weakContent: '降权规则', eventTypes: '活动类型', channels: '推送通道' };
+    let previewEditing = null;
+    const previewEscape = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
+    function savePreviewConfig() { localStorage.setItem(previewConfigKey, JSON.stringify(previewConfig)); }
+    function previewSettingValue(key) { return previewConfig.settings[key]; }
+    function setPreviewSetting(key, value) { previewConfig.settings[key] = value; savePreviewConfig(); showPreviewNotice('设置已保存'); }
+    function hydratePreviewSettings() {
+      document.querySelectorAll('[data-preview-setting]').forEach((control) => {
+        const value = previewSettingValue(control.dataset.previewSetting);
+        if (control.type === 'checkbox') control.checked = Boolean(value);
+        else if (value !== undefined && value !== null) control.value = String(value);
+      });
+      document.querySelectorAll('[data-city-rule]').forEach((control) => {
+        const value = previewConfig.settings.cityRules[control.dataset.cityRule];
+        if (value) control.value = value;
+      });
+      document.querySelectorAll('[data-origin-field]').forEach((control) => {
+        const value = previewConfig.settings.origin[control.dataset.originField];
+        if (value !== undefined) control.value = value;
+      });
+      document.querySelectorAll('[data-database-field]').forEach((control) => {
+        const value = previewConfig.settings.database[control.dataset.databaseField];
+        if (value !== undefined) control.value = value;
+      });
+    }
+    function setPreviewTaskStatus(message) {
+      const status = document.getElementById('previewTaskStatus');
+      if (status) status.textContent = message;
+      showPreviewNotice(message);
+    }
+    function runPreviewAsync(label, finalMessage = '执行成功') {
+      setPreviewTaskStatus(`请求已提交 · ${label}`);
+      window.setTimeout(() => setPreviewTaskStatus('任务排队中'), 220);
+      window.setTimeout(() => setPreviewTaskStatus('执行中'), 520);
+      window.setTimeout(() => setPreviewTaskStatus(`${finalMessage} · ${label}`), 900);
+    }
+    function previewCollectionSummary(collection, item) {
+      if (collection === 'eventTypes') return item.description || '未设置描述';
+      if (collection === 'channels') return `${item.type || '通知'} · ${item.endpoint || '未设置地址'}`;
+      return `${item.keywords || item.cities || '未设置内容'} · ${item.priority || '中'}优先级`;
+    }
+    function previewNewItem(collection) {
+      if (collection === 'eventTypes') return { name: '', description: '', enabled: true };
+      if (collection === 'channels') return { type: '飞书', name: '', endpoint: '', secret: '', enabled: true };
+      if (collection === 'sources') return { name: '', url: 'https://', kind: '活动平台', cities: '大湾区', priority: '中', enabled: true };
+      return { name: '', keywords: '', priority: collection === 'weakContent' ? '低' : '中', enabled: true };
+    }
+    function previewInput(label, name, value, type = 'text', placeholder = '') { return `<label><span>${label}</span><input name="${name}" type="${type}" value="${previewEscape(value)}" placeholder="${previewEscape(placeholder)}" /></label>`; }
+    function previewSelect(label, name, value, options) { return `<label><span>${label}</span><select name="${name}">${options.map((option) => `<option value="${previewEscape(option)}"${option === value ? ' selected' : ''}>${previewEscape(option)}</option>`).join('')}</select></label>`; }
+    function previewEditorFields(collection, item) {
+      const fields = [];
+      if (collection === 'channels') fields.push(previewSelect('通道类型', 'type', item.type, ['飞书', 'Server 酱']));
+      fields.push(previewInput('名称', 'name', item.name, 'text', `填写${previewCollectionLabels[collection] || '配置'}名称`));
+      if (collection === 'eventTypes') fields.push(previewInput('说明', 'description', item.description, 'text', '填写活动类型说明'));
+      if (collection === 'sources') fields.push(previewInput('入口地址', 'url', item.url, 'url', 'https://'));
+      if (collection === 'sources') fields.push(previewInput('来源类型', 'kind', item.kind, 'text', '活动平台 / 学术来源'));
+      if (collection === 'sources') fields.push(previewInput('覆盖城市', 'cities', item.cities, 'text', '大湾区 / 深圳 / 香港'));
+      if (['audiences', 'topics', 'weakContent'].includes(collection)) fields.push(previewInput('匹配关键词', 'keywords', item.keywords, 'text', '使用逗号分隔'));
+      if (['audiences', 'topics', 'weakContent', 'sources'].includes(collection)) fields.push(previewSelect('优先级', 'priority', item.priority, ['高', '中', '低']));
+      if (collection === 'channels') fields.push(previewInput('地址或 Webhook', 'endpoint', item.endpoint, 'url', '仅保存地址，不展示密钥'));
+      if (collection === 'channels') fields.push(previewInput('密钥', 'secret', item.secret, 'password', '留空表示不修改'));
+      fields.push(`<label class="inline-toggle"><span>状态</span><span><input name="enabled" type="checkbox"${item.enabled !== false ? ' checked' : ''} /> 启用这项配置</span></label>`);
+      return `<div class="editor-grid">${fields.join('')}</div>`;
+    }
+    function previewCardMarkup(collection, item) {
+      const editing = previewEditing?.collection === collection && previewEditing.id === item.id;
+      const disabled = item.enabled === false ? ' is-disabled' : '';
+      if (editing) return `<article class="preview-config-card${disabled}"><form class="preview-config-editor" data-preview-form="${collection}:${item.id}">${previewEditorFields(collection, item)}<span class="preview-config-editor-error" data-preview-error hidden></span><div class="preview-config-editor-actions"><button type="button" data-preview-action="cancel">取消</button><button type="button" data-preview-action="delete">移除</button><button type="submit">保存${previewCollectionLabels[collection]}</button></div></form></article>`;
+      return `<article class="preview-config-card${disabled}"><div class="preview-config-card-head"><div class="preview-config-card-copy"><strong>${previewEscape(item.name || `新建${previewCollectionLabels[collection]}`)}</strong><span>${previewEscape(previewCollectionSummary(collection, item))}</span></div><div class="preview-config-card-actions"><button type="button" data-preview-edit="${collection}:${item.id}">编辑</button><button type="button" data-preview-delete="${collection}:${item.id}">移除</button></div></div></article>`;
+    }
+    function renderPreviewCollections() {
+      Object.keys(previewCollectionLabels).forEach((collection) => {
+        const target = document.querySelector(`[data-config-collection="${collection}"]`);
+        if (target) target.innerHTML = previewConfig[collection].map((item) => previewCardMarkup(collection, item)).join('');
+      });
+    }
+    function showPreviewNotice(message) {
+      let toast = document.getElementById('previewNotice');
+      if (!toast) { toast = document.createElement('div'); toast.id = 'previewNotice'; toast.style.cssText = 'position:fixed;right:22px;bottom:22px;z-index:50;padding:11px 14px;border-radius:8px;color:#fff;background:#17231e;font-size:13px;font-weight:800;box-shadow:0 12px 26px rgba(24,45,34,.2);'; document.body.appendChild(toast); }
+      toast.textContent = message; toast.hidden = false; window.clearTimeout(showPreviewNotice.timer); showPreviewNotice.timer = window.setTimeout(() => { toast.hidden = true; }, 1800);
+    }
+    renderPreviewCollections();
+    hydratePreviewSettings();
+    document.addEventListener('click', (event) => {
+      const open = event.target.closest('[data-open-config]');
+      if (open) {
+        const collection = open.dataset.openConfig;
+        if (collection === 'origin') return;
+        const item = { id: `new-${Date.now()}`, ...previewNewItem(collection) };
+        previewConfig[collection].push(item); previewEditing = { collection, id: item.id }; renderPreviewCollections();
+        return;
+      }
+      const edit = event.target.closest('[data-preview-edit]');
+      if (edit) { const [collection, id] = edit.dataset.previewEdit.split(':'); previewEditing = { collection, id }; renderPreviewCollections(); return; }
+      const remove = event.target.closest('[data-preview-delete]');
+      if (remove) { const [collection, id] = remove.dataset.previewDelete.split(':'); previewConfig[collection] = previewConfig[collection].filter((item) => item.id !== id); savePreviewConfig(); renderPreviewCollections(); showPreviewNotice(`${previewCollectionLabels[collection]}已移除`); return; }
+      const action = event.target.closest('[data-preview-action]');
+      if (action && previewEditing) {
+        if (action.dataset.previewAction === 'cancel') { previewConfig[previewEditing.collection] = previewConfig[previewEditing.collection].filter((item) => item.id !== previewEditing.id || !previewEditing.id.startsWith('new-')); previewEditing = null; renderPreviewCollections(); }
+        if (action.dataset.previewAction === 'delete') { previewConfig[previewEditing.collection] = previewConfig[previewEditing.collection].filter((item) => item.id !== previewEditing.id); previewEditing = null; savePreviewConfig(); renderPreviewCollections(); showPreviewNotice('配置已移除'); }
+      }
+      if (event.target.closest('[data-action="test-channel"]')) {
+        const available = previewConfig.channels.some((channel) => channel.enabled !== false && channel.endpoint);
+        runPreviewAsync('测试推送通道', available ? '执行成功' : '执行失败 · 没有已启用的推送地址');
+      }
+      if (event.target.closest('[data-action="clear-secret"]')) {
+        previewConfig.channels = previewConfig.channels.map((channel) => ({ ...channel, secret: '' }));
+        savePreviewConfig(); renderPreviewCollections(); runPreviewAsync('清除密钥');
+      }
+      if (event.target.closest('[data-action="save-origin"]')) {
+        document.querySelectorAll('[data-origin-field]').forEach((control) => { previewConfig.settings.origin[control.dataset.originField] = control.value.trim(); });
+        savePreviewConfig(); setPreviewTaskStatus('执行成功 · 交通出发点已保存');
+      }
+      if (event.target.closest('[data-action="edit-database"]')) {
+        const editor = document.getElementById('databaseEditor');
+        if (editor) { hydratePreviewSettings(); editor.hidden = false; editor.querySelector('[data-database-field]')?.focus(); }
+      }
+      if (event.target.closest('[data-action="cancel-database"]')) {
+        const editor = document.getElementById('databaseEditor');
+        hydratePreviewSettings(); if (editor) editor.hidden = true;
+      }
+      if (event.target.closest('[data-action="save-database"]')) {
+        document.querySelectorAll('[data-database-field]').forEach((control) => { previewConfig.settings.database[control.dataset.databaseField] = control.value.trim(); });
+        savePreviewConfig(); const editor = document.getElementById('databaseEditor'); if (editor) editor.hidden = true;
+        const status = document.getElementById('databaseStatus'); if (status) status.textContent = '已连接 · UTC 保存';
+        setPreviewTaskStatus('执行成功 · 数据库连接配置已保存');
+      }
+      if (event.target.closest('[data-action="run-task"]')) runPreviewAsync('立即运行任务');
+      if (event.target.closest('[data-action="preflight"]')) runPreviewAsync('本地预检', '执行成功');
+      if (event.target.closest('[data-action="generate-automation"]')) runPreviewAsync('生成自动化文件');
+    });
+    document.addEventListener('change', (event) => {
+      const control = event.target.closest('[data-preview-setting]');
+      if (control) {
+        previewConfig.settings[control.dataset.previewSetting] = control.type === 'checkbox' ? control.checked : control.value;
+        savePreviewConfig(); showPreviewNotice('设置已保存');
+      }
+      const cityRule = event.target.closest('[data-city-rule]');
+      if (cityRule) {
+        previewConfig.settings.cityRules[cityRule.dataset.cityRule] = cityRule.value;
+        savePreviewConfig(); showPreviewNotice(`${cityRule.dataset.cityRule}收录门槛已保存`);
+      }
+    });
+    document.addEventListener('submit', (event) => {
+      const form = event.target.closest('[data-preview-form]');
+      if (!form) return;
+      event.preventDefault();
+      const [collection, id] = form.dataset.previewForm.split(':');
+      const data = Object.fromEntries(new FormData(form).entries());
+      const item = previewConfig[collection].find((entry) => entry.id === id);
+      const error = form.querySelector('[data-preview-error]');
+      if (!String(data.name || '').trim()) { error.textContent = '请先填写名称'; error.hidden = false; form.querySelector('[name="name"]')?.focus(); return; }
+      Object.assign(item, data, { enabled: data.enabled === 'on' });
+      previewEditing = null; savePreviewConfig(); renderPreviewCollections(); showPreviewNotice(`${previewCollectionLabels[collection]}已保存`);
+    });
+    const viewButtons = document.querySelectorAll('[data-view]');
+    const views = document.querySelectorAll('.view');
+    viewButtons.forEach((button) => button.addEventListener('click', () => { const id = button.dataset.view; views.forEach((view) => view.classList.toggle('active', view.id === id)); document.querySelectorAll('.top-nav button').forEach((item) => item.classList.toggle('active', item.dataset.view === id)); }));
+    document.querySelectorAll('.settings-nav button').forEach((button) => button.addEventListener('click', () => { const id = button.dataset.panel; document.querySelectorAll('.settings-nav button').forEach((item) => item.classList.toggle('active', item === button)); document.querySelectorAll('.settings-panel').forEach((panel) => panel.classList.toggle('active', panel.dataset.panelContent === id)); }));
+    document.querySelectorAll('.calendar-slot').forEach((card) => card.addEventListener('click', () => { const event = card.dataset.event; document.querySelectorAll('.calendar-slot').forEach((item) => item.classList.toggle('selected', item === card)); const detail = document.getElementById(`detail-${event}`); detail?.classList.add('is-targeted'); detail?.scrollIntoView({ behavior: 'smooth', block: 'start' }); window.setTimeout(() => detail?.classList.remove('is-targeted'), 1200); }));
+    document.querySelectorAll('.filter').forEach((button) => button.addEventListener('click', () => button.classList.toggle('active')));
+    const particleCanvas = document.getElementById('particleField');
+    const particleContext = particleCanvas?.getContext('2d');
+    const particlePointer = { x: 0, y: 0, active: false };
+    const particleSet = Array.from({ length: 96 }, () => ({ x: Math.random(), y: Math.random(), vx: (Math.random() - .5) * .00035, vy: (Math.random() - .5) * .00035, size: Math.random() * 1.8 + .7 }));
+    function resizeParticleCanvas() { if (!particleCanvas) return; const ratio = Math.min(window.devicePixelRatio || 1, 2); const bounds = particleCanvas.getBoundingClientRect(); particleCanvas.width = Math.max(1, Math.floor(bounds.width * ratio)); particleCanvas.height = Math.max(1, Math.floor(bounds.height * ratio)); particleContext.setTransform(ratio, 0, 0, ratio, 0, 0); }
+    function drawParticles() { if (!particleCanvas || !particleContext) return; const bounds = particleCanvas.getBoundingClientRect(); particleContext.clearRect(0, 0, bounds.width, bounds.height); const points = particleSet.map((particle) => { particle.x += particle.vx; particle.y += particle.vy; if (particle.x < 0 || particle.x > 1) particle.vx *= -1; if (particle.y < 0 || particle.y > 1) particle.vy *= -1; const influenceX = particlePointer.active ? (particlePointer.x - particle.x) * .018 : 0; const influenceY = particlePointer.active ? (particlePointer.y - particle.y) * .018 : 0; return { x: (particle.x + influenceX) * bounds.width, y: (particle.y + influenceY) * bounds.height, size: particle.size }; }); points.forEach((point, index) => { for (let next = index + 1; next < points.length; next += 1) { const other = points[next]; const distance = Math.hypot(point.x - other.x, point.y - other.y); if (distance < 92) { particleContext.strokeStyle = `rgba(40, 118, 81, ${.10 * (1 - distance / 92)})`; particleContext.lineWidth = 1; particleContext.beginPath(); particleContext.moveTo(point.x, point.y); particleContext.lineTo(other.x, other.y); particleContext.stroke(); } } particleContext.fillStyle = 'rgba(40, 118, 81, .34)'; particleContext.beginPath(); particleContext.arc(point.x, point.y, point.size, 0, Math.PI * 2); particleContext.fill(); }); requestAnimationFrame(drawParticles); }
+    window.addEventListener('resize', resizeParticleCanvas); document.getElementById('directory')?.addEventListener('pointermove', (event) => { const bounds = particleCanvas.getBoundingClientRect(); particlePointer.x = (event.clientX - bounds.left) / bounds.width; particlePointer.y = (event.clientY - bounds.top) / bounds.height; particlePointer.active = true; }); document.getElementById('directory')?.addEventListener('pointerleave', () => { particlePointer.active = false; }); resizeParticleCanvas(); drawParticles();
+  </script>
+  <script>
+    (() => {
+      const state = { coverageDays: 15, city: '', topic: '', query: '' };
+      const request = async (path, options = {}) => {
+        const response = await fetch(path, { headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, ...options });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.detail?.errors?.join('、') || payload.detail || `HTTP ${response.status}`);
+        return payload;
+      };
+      const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
+      const partsOf = (value) => { const date = new Date(value); return { date, day: String(date.getDate()).padStart(2, '0'), month: date.toLocaleString('en-US', { month: 'short', timeZone: 'Asia/Shanghai' }).toUpperCase(), weekday: new Intl.DateTimeFormat('zh-CN', { weekday: 'short', timeZone: 'Asia/Shanghai' }).format(date), time: date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Shanghai' }) }; };
+      const todayInShanghai = () => { const now = new Date(); const values = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now); return new Date(Date.UTC(Number(values.find((item) => item.type === 'year').value), Number(values.find((item) => item.type === 'month').value) - 1, Number(values.find((item) => item.type === 'day').value))); };
+      const dayKey = (date) => date.toISOString().slice(0, 10);
+      const renderDetails = (items) => {
+        const target = document.querySelector('.calendar-details');
+        if (!target) return;
+        const content = items.map((item) => { const f = item.facts; const e = item.enrichment; const p = partsOf(f.start_at); return `<article class="calendar-detail" id="detail-${escapeHtml(item.id)}"><div class="calendar-detail-head"><div class="calendar-detail-date"><strong>${p.day}</strong><span class="calendar-detail-month">${p.month}</span><span class="calendar-detail-weekday">${p.weekday}</span></div><div><div class="calendar-detail-title-line"><h3 class="calendar-detail-title">${escapeHtml(f.title)}</h3><span class="calendar-detail-badges"><span class="calendar-domain-tag">${escapeHtml(e.kind)}</span><span class="calendar-rating is-featured">${escapeHtml(e.relevance)}</span></span></div><span class="calendar-detail-type">${p.time} · ${escapeHtml(f.timezone)} · ${escapeHtml(e.kind)}</span></div></div><div class="calendar-detail-content"><div class="calendar-detail-meta"><div class="calendar-meta-primary-row"><span class="calendar-meta-primary"><strong>主办方</strong>${escapeHtml(f.organizer)}</span><span class="calendar-meta-primary"><strong>地点</strong>${escapeHtml(f.city)} · ${escapeHtml(f.venue)}</span><span class="calendar-meta-primary"><strong>通勤</strong><b>从深大站约 ${escapeHtml(e.commute_minutes)} 分钟</b></span></div><div class="calendar-meta-secondary-row"><span class="calendar-meta-secondary"><strong>社区</strong>${escapeHtml(e.community)}</span><span class="calendar-meta-secondary"><strong>方向</strong>${escapeHtml(e.topic)}</span><span class="calendar-meta-secondary"><strong>来源</strong>${escapeHtml(e.source_name)}</span></div></div><section class="calendar-detail-why"><div class="calendar-detail-why-heading"><span>活动摘要</span><em>摘要与事实分离</em></div><p class="calendar-detail-why-copy">${escapeHtml(e.why_worth)}</p><p class="calendar-detail-description">${escapeHtml(e.summary)}</p></section><div class="calendar-detail-columns"><section class="calendar-detail-section"><h4>你会收获什么</h4><ul>${e.takeaways.map((value) => `<li>${escapeHtml(value)}</li>`).join('')}</ul></section><section class="calendar-detail-section"><h4>提前准备</h4><ul>${e.prerequisites.map((value) => `<li>${escapeHtml(value)}</li>`).join('')}</ul></section></div><a class="calendar-detail-link" href="${escapeHtml(f.canonical_url)}" target="_blank" rel="noreferrer">打开原文与报名 ↗</a></div></article>`; }).join('');
+        target.innerHTML = `<div class="calendar-details-heading"><h2>活动详情</h2><span>主办方、地点、活动摘要、收获和提前准备</span></div>${content || '<div class="calendar-detail"><p class="calendar-detail-description">当前筛选没有通过事实字段核验的活动。</p></div>'}`;
+      };
+      const renderCalendar = (items) => {
+        const target = document.querySelector('.calendar-days');
+        if (!target) return;
+        const start = todayInShanghai(); const grouped = new Map();
+        items.forEach((item) => { const key = dayKey(new Date(item.facts.start_at)); if (!grouped.has(key)) grouped.set(key, []); grouped.get(key).push(item); });
+        target.innerHTML = Array.from({ length: state.coverageDays }, (_, index) => { const date = new Date(start.getTime() + index * 86400000); const key = dayKey(date); const dayItems = grouped.get(key) || []; const label = new Intl.DateTimeFormat('zh-CN', { day: '2-digit', timeZone: 'Asia/Shanghai' }).format(date); const weekday = new Intl.DateTimeFormat('zh-CN', { weekday: 'short', timeZone: 'Asia/Shanghai' }).format(date); const cards = dayItems.map((item) => { const p = partsOf(item.facts.start_at); return `<button class="calendar-slot ${item.enrichment.relevance === '高含金量' ? 'is-featured' : ''}" data-event="${escapeHtml(item.id)}"><span class="calendar-slot-topline"><span>${p.time}</span><span class="calendar-slot-rating">${escapeHtml(item.enrichment.relevance)}</span></span><span class="calendar-slot-title">${escapeHtml(item.facts.title)}</span><span class="calendar-slot-city">${escapeHtml(item.facts.city)} · ${escapeHtml(item.facts.venue)}</span><span class="calendar-slot-kind">${escapeHtml(item.enrichment.kind)}</span></button>`; }).join(''); return `<div class="calendar-day ${dayItems.length ? '' : 'is-empty'}"><div class="calendar-day-header"><span class="calendar-day-number">${label}</span><span>${weekday}</span></div><div class="calendar-day-events">${cards}</div></div>`; }).join('');
+        const title = document.querySelector('.calendar-overview-head strong'); const meta = document.querySelector('.calendar-overview-head span'); if (title) title.textContent = `未来 ${state.coverageDays} 天 · ${items.length} 场活动`; if (meta) meta.textContent = '已核验公开来源 · 事实字段完整';
+        document.querySelectorAll('.calendar-slot').forEach((card) => card.addEventListener('click', () => { document.querySelectorAll('.calendar-slot').forEach((item) => item.classList.toggle('selected', item === card)); const detail = document.getElementById(`detail-${card.dataset.event}`); detail?.classList.add('is-targeted'); detail?.scrollIntoView({ behavior: 'smooth', block: 'start' }); window.setTimeout(() => detail?.classList.remove('is-targeted'), 1200); }));
+      };
+      const loadEvents = async () => { try { const query = new URLSearchParams({ coverage_days: String(state.coverageDays) }); if (state.query) query.set('q', state.query); if (state.city) query.set('city', state.city); if (state.topic) query.set('topic', state.topic); const payload = await request(`/api/public/events?${query}`); renderCalendar(payload.items || []); renderDetails(payload.items || []); const count = document.querySelector('.summary strong'); const cities = document.querySelector('.summary .meta'); if (count) count.textContent = String(payload.total || 0); if (cities) cities.textContent = [...new Set((payload.items || []).map((item) => item.facts.city))].join(' · ') || '当前筛选无结果'; } catch (error) { showPreviewNotice(`接口读取失败：${error.message}`); } };
+      const syncConfig = async () => { try { const current = await request('/api/ops/config'); const settings = previewConfig.settings; const patch = { schedule: { coverage_days: Number(settings.coverageDays || 15), time: String(settings.runTime || '07:00').slice(0, 5), timezone: 'Asia/Shanghai' }, display_fields: { show_travel: Boolean(settings.showTravel), show_cost: Boolean(settings.showCost), show_cover: Boolean(settings.showCover), show_takeaways: Boolean(settings.showTakeaways), show_prerequisites: Boolean(settings.showPrerequisites) }, origin: { name: settings.origin.name, address: settings.origin.address, mode: settings.origin.mode, map_url: settings.origin.mapUrl }, audiences: previewConfig.audiences.map((item) => ({ ...item, is_enabled: item.enabled !== false })), sources: previewConfig.sources.map((item) => ({ ...item, is_enabled: item.enabled !== false })), topics: previewConfig.topics.map((item) => ({ ...item, is_enabled: item.enabled !== false })), weak_content_rules: previewConfig.weakContent.map((item) => ({ ...item, is_enabled: item.enabled !== false })), event_types: previewConfig.eventTypes.map((item) => ({ ...item, is_enabled: item.enabled !== false })), channels: previewConfig.channels.map((item) => ({ ...item, is_enabled: item.enabled !== false, secret_configured: Boolean(item.secret) })) }; await request('/api/ops/config', { method: 'PATCH', body: JSON.stringify({ expected_revision: current.draft_revision, patch }) }); showPreviewNotice('配置已写入数据库草稿'); } catch (error) { showPreviewNotice(`配置保存失败：${error.message}`); } };
+      const pollJob = async (jobId, label) => { const status = document.getElementById('previewTaskStatus'); for (;;) { const job = await request(`/api/ops/jobs/${jobId}`); if (status) status.textContent = `${job.status} · ${job.message} · ${job.progress}%`; if (['succeeded', 'failed', 'cancelled'].includes(job.status)) { showPreviewNotice(`${label}：${job.message}`); return; } await new Promise((resolve) => window.setTimeout(resolve, 500)); } };
+      document.addEventListener('input', (event) => { const input = event.target.closest('.search input'); if (!input) return; window.clearTimeout(input._timer); input._timer = window.setTimeout(() => { state.query = input.value.trim(); loadEvents(); }, 280); });
+      document.addEventListener('click', (event) => { const filter = event.target.closest('.filter'); if (filter) { const type = filter.dataset.filter; if (type === '全部城市') { const options = ['', '深圳', '广州', '香港', '珠海', '澳门']; state.city = options[(options.indexOf(state.city) + 1) % options.length]; filter.textContent = state.city || '全部城市⌄'; } if (type === '主题筛选') { const options = ['', 'Agent', '推理', '开源', 'GPU']; state.topic = options[(options.indexOf(state.topic) + 1) % options.length]; filter.textContent = state.topic || '主题筛选⌄'; } if (type === '日期范围') { state.coverageDays = state.coverageDays === 15 ? 30 : state.coverageDays === 30 ? 60 : 15; filter.textContent = `未来 ${state.coverageDays} 天⌄`; } loadEvents(); } const action = event.target.closest('[data-action]'); if (!action) return; const name = action.dataset.action; if (name === 'run-task' || name === 'preflight' || name === 'generate-automation') { event.stopImmediatePropagation(); request('/api/ops/jobs', { method: 'POST', body: JSON.stringify({ job_type: name }) }).then((job) => pollJob(job.id, action.textContent.trim())).catch((error) => showPreviewNotice(`任务创建失败：${error.message}`)); } if (name === 'test-channel' || name === 'clear-secret') { event.stopImmediatePropagation(); request(`/api/ops/${name === 'test-channel' ? 'channels/test' : 'secrets/clear'}`, { method: 'POST', body: '{}' }).then((result) => showPreviewNotice(result.message)).catch((error) => showPreviewNotice(`操作失败：${error.message}`)); } if (name === 'save-origin') syncConfig(); }, true);
+      document.addEventListener('change', (event) => { if (event.target.closest('[data-preview-setting], [data-city-rule], [data-origin-field]')) window.setTimeout(syncConfig, 120); });
+      const publishButton = document.createElement('button'); publishButton.className = 'mini-button primary'; publishButton.type = 'button'; publishButton.textContent = '发布更新'; publishButton.addEventListener('click', async () => { try { await syncConfig(); const result = await request('/api/ops/config/publish', { method: 'POST', body: '{}' }); showPreviewNotice(`配置已发布 · revision ${result.published_revision}`); } catch (error) { showPreviewNotice(`发布失败：${error.message}`); } }); document.querySelector('.settings-title')?.appendChild(publishButton);
+      request('/api/ops/config').then((config) => {
+        const published = config.published || {};
+        state.coverageDays = Number(published.schedule?.coverage_days || 15);
+        ['audiences', 'sources', 'topics', 'eventTypes', 'channels'].forEach((collection) => {
+          const serverKey = collection === 'eventTypes' ? 'event_types' : collection;
+          if (!Array.isArray(published[serverKey])) return;
+          previewConfig[collection] = published[serverKey].map((item) => ({ ...item, enabled: item.is_enabled !== false }));
+        });
+        if (Array.isArray(published.weak_content_rules)) previewConfig.weakContent = published.weak_content_rules.map((item) => ({ ...item, enabled: item.is_enabled !== false }));
+        savePreviewConfig();
+        renderPreviewCollections();
+      }).catch(() => {}).finally(loadEvents);
+    })();
+  </script>
+</body>
+</html>

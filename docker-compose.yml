@@ -1,0 +1,52 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: cityactivi
+      POSTGRES_USER: cityactivi
+      POSTGRES_PASSWORD: cityactivi_local_only
+    volumes:
+      - cityactivi_pg:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cityactivi -d cityactivi"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+asyncpg://cityactivi:cityactivi_local_only@db:5432/cityactivi
+      PORT: 8000
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+  scheduler:
+    build: .
+    command: ["python", "-m", "backend.app.scheduler"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://cityactivi:cityactivi_local_only@db:5432/cityactivi
+    depends_on:
+      db:
+        condition: service_healthy
+  worker:
+    build: .
+    command: ["python", "-m", "backend.app.worker"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://cityactivi:cityactivi_local_only@db:5432/cityactivi
+    depends_on:
+      db:
+        condition: service_healthy
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      - api
+    ports:
+      - "8080:80"
+    volumes:
+      - ./deploy/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+volumes:
+  cityactivi_pg:

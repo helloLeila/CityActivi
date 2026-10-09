@@ -1,1 +1,8 @@
 .DS_Store
+.venv/
+__pycache__/
+*.py[cod]
+cityactivi.db
+.env
+.env.local
+data/
