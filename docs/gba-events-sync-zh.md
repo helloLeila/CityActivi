@@ -335,3 +335,46 @@ docker compose down -v
 4. API 或网页能返回仍在展示窗口内的活动。
 
 网页能打开只代表 Nginx/API 链路正常，不代表今天的活动数据已经生成或导入。
+
+## 十、当天 JSON 不存在怎么办
+
+先按当天日期检查文件：
+
+```bash
+TODAY=$(date +%F)
+ls -l "${TODAY}-gba-tech-events.json"
+```
+
+再运行批次校验：
+
+```bash
+node /Users/leila/.codex/visualizations/2026/09/04/01a06aaa-a4a6-7763-a1b1-977a6fb6b5df/scripts/validate-gba-events-batch.mjs \
+  "/path/to/${TODAY}-gba-tech-events.json" "$TODAY"
+```
+
+校验会检查：
+
+- 文件存在；
+- 文件名日期是当天；
+- `generated_at` 日期是当天；
+- `schema_version=1`；
+- `producer=gba-tech-events`；
+- `events` 是数组；
+- 每条活动有基本事实字段和证据对象。
+
+如果输出 `JSON_NOT_FOUND`、`DATE_FILENAME_MISMATCH` 或 `DATE_GENERATED_AT_MISMATCH`，不要把旧批次改名成今天。应重新运行当天检索，生成当天 Markdown 和 JSON；如果自动化没有产物，记录为自动化失败并手动补跑。
+
+## 十一、每日回复的固定短格式
+
+每日任务完成后先使用下面格式，避免用长篇过程描述代替结果：
+
+```text
+状态：成功 / 部分成功 / 失败
+批次：YYYY-MM-DD-gba-tech-events.json；活动 X 场
+CityActivi：已导入 / 重放无新增 / 待消费 / 失败
+推送：飞书 已推送/未配置；Server酱 已推送/未配置
+原因：一句话说明失败或缺失原因；成功时写“无”
+下一步：无 / 手动补跑 / 检查 worker 日志
+```
+
+只有在用户需要时，再补充来源、候补、交通和逐场活动详情。
