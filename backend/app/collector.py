@@ -19,6 +19,8 @@ import httpx
 from bs4 import BeautifulSoup
 from sqlalchemy import select
 
+from .event_ingest import normalize_url, upsert_event
+
 from .main import (
     REQUIRED_FACTS,
     Event,
@@ -844,7 +846,7 @@ def _discover_detail_links(body: str, source_url: str, limit: int = MAX_DETAIL_L
 
 
 def _make_event_key(url: str) -> str:
-    return hashlib.sha256(url.encode("utf-8")).hexdigest()[:32]
+    return hashlib.sha256(normalize_url(url).encode("utf-8")).hexdigest()[:32]
 
 
 def _canonical_url_allowed(candidate: dict[str, Any], source: dict[str, Any]) -> bool:
@@ -1145,23 +1147,13 @@ async def collect_events_once() -> dict[str, Any]:
             status_code = status_by_key[event_key]
             allowed_canonical_hosts = list(source.get("canonical_hosts", [])) + list(CANONICAL_HOSTS_BY_FORMAT.get(str(source.get("format", "")), set()))
             evidence = {field: {"source_url": candidate["source_url"], "canonical_url": candidate["canonical_url"], "captured_at": datetime.now(UTC).isoformat(), "status_code": status_code, "allowed_canonical_hosts": allowed_canonical_hosts} for field in REQUIRED_FACTS}
-            existing = (await session.execute(select(Event).where(Event.event_key == event_key))).scalar_one_or_none()
-            fact = EventFactVersion(event_key=event_key, title=candidate["title"], start_at=candidate["start_at"], timezone=candidate["timezone"], city=candidate["city"], venue=candidate["venue"], organizer=candidate["organizer"], canonical_url=candidate["canonical_url"], technical_signal=candidate["technical_signal"], evidence=evidence)
-            enrichment = EventEnrichmentVersion(event_key=event_key, summary=candidate["description"][:1200] or f"围绕{candidate['technical_signal']}展开。", calendar_summary=f"{candidate['technical_signal']} · {candidate['organizer']}", why_worth=f"公开详情页包含可核验的技术主题：{candidate['technical_signal']}。", takeaways=["查看公开议程与技术主题", "记录适合继续深挖的工程方法"], prerequisites=["阅读活动原文议程", "确认地点和开始时间"], topic=candidate["technical_signal"], kind="网络抓取", relevance="中高含金量", commute_minutes=None, community=candidate["city"], source_name=candidate["source_name"])
-            session.add_all([fact, enrichment])
-            await session.flush()
-            if existing:
-                old_status = existing.status
-                existing.current_fact_version_id = fact.id
-                existing.current_enrichment_version_id = enrichment.id
-                existing.status = "published"
-            else:
-                existing = Event(event_key=event_key, status="published", current_fact_version_id=fact.id, current_enrichment_version_id=enrichment.id, published_at=datetime.now(UTC))
-                session.add(existing)
-                old_status = None
-            await session.flush()
-            session.add(EventVersion(event_key=event_key, fact_version_id=fact.id, enrichment_version_id=enrichment.id, published_at=datetime.now(UTC)))
-            session.add(EventStatusChange(event_key=event_key, old_status=old_status, new_status="published", trigger_source="network_collector", evidence=evidence, observed_at=datetime.now(UTC)))
+            enrichment = dict(summary=candidate["description"][:1200],
+                              calendar_summary=f"{candidate['technical_signal']} · {candidate['organizer']}",
+                              why_worth=f"公开详情页包含可核验的技术主题：{candidate['technical_signal']}。",
+                              takeaways=[], prerequisites=["阅读活动原文议程", "确认地点和开始时间"],
+                              topic=candidate["technical_signal"][:150], kind="网络抓取", relevance="中高含金量")
+            await upsert_event(session, candidate, enrichment, evidence,
+                               source_name=candidate["source_name"], producer="network_collector")
             result["published_events"] += 1
             result["published_by_city"][candidate["city"]] = result["published_by_city"].get(candidate["city"], 0) + 1
             source_name = str(candidate.get("source_name") or source.get("name") or "公开来源")

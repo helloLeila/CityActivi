@@ -76,3 +76,15 @@ docker compose up --build
 .venv/bin/python -m py_compile backend/app/*.py tests/*.py
 docker compose config
 ```
+
+## 6. 每日搜寻详细数据接入
+
+已支持 JSON 收件箱与本地 CLI 导入，和原网络采集共享合并逻辑。详细数据、来源证据及冲突信息在原活动详情中展示，重复批次通过持久收据跳过。
+
+- 契约与运行说明：[daily-search-import.md](docs/daily-search-import.md)
+- 中文手动同步与排查：[gba-events-sync-zh.md](docs/gba-events-sync-zh.md)
+- 收件箱：`data/event-inbox/`；worker 使用只读挂载并约每 5 秒扫描。
+- 手动导入：`docker compose exec -T worker python -m backend.app.import_events --inbox /app/data/event-inbox`
+- 新增验证：`node --test tests/test_event_details.mjs`。
+
+原文中“跨来源仅按 canonical_url 去重”“只保留未开始活动”的旧行为现已扩展：规范 URL 加场次身份识别同一来源，跨平台采用精确业务身份匹配，进行中的多日活动继续展示。运行环境、数据源配置及原有活动记录保持兼容。

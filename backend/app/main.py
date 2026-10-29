@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, UniqueConstraint, delete, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncAttrs, AsyncSession, async_sessionmaker, create_async_engine
@@ -91,6 +92,26 @@ class EventVersion(Base):
     fact_version_id: Mapped[int] = mapped_column(Integer)
     enrichment_version_id: Mapped[int] = mapped_column(Integer)
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+
+class EventSupplement(Base):
+    __tablename__ = "event_supplements"
+    event_key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    document: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class EventSourceAlias(Base):
+    __tablename__ = "event_source_aliases"
+    url_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    normalized_url: Mapped[str] = mapped_column(Text)
+    event_key: Mapped[str] = mapped_column(String(100), index=True)
+
+
+class EventImportBatch(Base):
+    __tablename__ = "event_import_batches"
+    digest: Mapped[str] = mapped_column(String(64), primary_key=True)
+    report: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
 
 class EventStatusChange(Base):
@@ -265,8 +286,13 @@ def evaluate_publication(fact: dict[str, Any], evidence: dict[str, Any]) -> list
     errors = [f"MISSING_FACT:{field}" for field in REQUIRED_FACTS if not fact.get(field)]
     errors.extend(f"MISSING_EVIDENCE:{field}" for field in REQUIRED_FACTS if not evidence.get(field))
     start_at = fact.get("start_at")
-    if isinstance(start_at, datetime) and start_at <= datetime.now(UTC):
-        errors.append("EVENT_ALREADY_STARTED")
+    if isinstance(start_at, datetime):
+        now = datetime.now(UTC)
+        end_at = fact.get("end_at")
+        if isinstance(end_at, datetime) and as_utc(end_at) <= as_utc(start_at):
+            errors.append("INVALID_EVENT_INTERVAL")
+        if as_utc(start_at) <= now and not (isinstance(end_at, datetime) and as_utc(end_at) > now):
+            errors.append("EVENT_ALREADY_STARTED")
     try:
         ZoneInfo(fact.get("timezone", ""))
     except (ZoneInfoNotFoundError, TypeError, ValueError):
@@ -290,7 +316,8 @@ def evaluate_publication(fact: dict[str, Any], evidence: dict[str, Any]) -> list
     return errors
 
 
-def serialize_event(fact: EventFactVersion, enrichment: EventEnrichmentVersion, event: Event) -> dict[str, Any]:
+def serialize_event(fact: EventFactVersion, enrichment: EventEnrichmentVersion, event: Event, supplement: EventSupplement | None = None) -> dict[str, Any]:
+    document = supplement.document if supplement else {}
     return {
         "id": event.event_key,
         "status": event.status,
@@ -319,6 +346,9 @@ def serialize_event(fact: EventFactVersion, enrichment: EventEnrichmentVersion, 
             "community": enrichment.community,
             "source_name": enrichment.source_name,
         },
+        "details": document.get("details", {}),
+        "sources": document.get("sources", []),
+        "conflicts": document.get("conflicts", []),
     }
 
 
@@ -439,6 +469,7 @@ async def seed_database() -> None:
 
 
 app = FastAPI(title="CityActivi API", version="0.1.0")
+app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 
 
@@ -475,7 +506,12 @@ async def public_events(coverage_days: int = Query(15), q: str = "", city: str =
         for event in rows:
             fact = await session.get(EventFactVersion, event.current_fact_version_id)
             enrichment = await session.get(EventEnrichmentVersion, event.current_enrichment_version_id)
-            if not fact or not enrichment or not (now <= as_utc(fact.start_at) <= now + timedelta(days=coverage_days)):
+            if not fact or not enrichment:
+                continue
+            supplement = await session.get(EventSupplement, event.event_key)
+            details = supplement.document.get("details", {}) if supplement else {}
+            visible_end = fact.end_at or (as_utc(fact.start_at) + timedelta(days=1) if details.get("time_precision") == "date" else fact.start_at)
+            if as_utc(visible_end) <= now or as_utc(fact.start_at) > now + timedelta(days=coverage_days):
                 continue
             searchable = " ".join((fact.title, fact.city, fact.organizer, fact.venue, enrichment.topic)).lower()
             if q and q.lower() not in searchable:
@@ -484,7 +520,7 @@ async def public_events(coverage_days: int = Query(15), q: str = "", city: str =
                 continue
             if topic and topic.lower() not in enrichment.topic.lower():
                 continue
-            output.append(serialize_event(fact, enrichment, event))
+            output.append(serialize_event(fact, enrichment, event, supplement))
         output.sort(key=lambda item: item["facts"]["start_at"])
         return {"items": output, "total": len(output), "coverage_days": coverage_days, "generated_at": now.isoformat()}
 
@@ -499,7 +535,7 @@ async def public_event(event_key: str) -> dict[str, Any]:
         enrichment = await session.get(EventEnrichmentVersion, event.current_enrichment_version_id)
         if not fact or not enrichment:
             raise HTTPException(status_code=409, detail="published snapshot is incomplete")
-        return serialize_event(fact, enrichment, event)
+        return serialize_event(fact, enrichment, event, await session.get(EventSupplement, event.event_key))
 
 
 @app.get("/api/ops/config")

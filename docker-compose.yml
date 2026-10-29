@@ -35,6 +35,8 @@ services:
   worker:
     build: .
     command: ["python", "-m", "backend.app.worker"]
+    volumes:
+      - ./data/event-inbox:/app/data/event-inbox:ro
     environment:
       DATABASE_URL: postgresql+asyncpg://cityactivi:cityactivi_local_only@db:5432/cityactivi
     depends_on:
